@@ -1,0 +1,5 @@
+# 手伝いの人の git のメールアドレス。1行に1つ。
+# ここにある人は、プルリクエストなしで main に直接 push でき、リバ側へデプロイ（npm run deploy）もできる。
+#   push は scripts/check-push.cjs、デプロイは scripts/deploy-rvatec.cjs がこの名簿を見る。
+# 2026-11-03 作成時点では誰もいない（川﨑課長を入れるかは平田さんが決める）。
+# 持ち主ではないので owners.txt には足さない（関所の ⚠ 表示を残すため）。

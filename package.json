@@ -1,0 +1,37 @@
+{
+  "name": "koutei-kanri-app",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "prepare": "node scripts/check-push.cjs --install",
+    "dev": "next dev",
+    "build": "next build --webpack",
+    "start": "next start",
+    "lint": "eslint",
+    "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
+    "predeploy": "node scripts/check-clean.cjs && rimraf .next .open-next",
+    "deploy": "node scripts/deploy-rvatec.cjs",
+    "cf-typegen": "wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts"
+  },
+  "dependencies": {
+    "@opennextjs/cloudflare": "^1.20.13",
+    "modern-screenshot": "^4.7.0",
+    "next": "16.4.2",
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
+    
+    
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.4.2",
+    "rimraf": "^6.1.3",
+    "tailwindcss": "^4",
+    "typescript": "^5",
+    "wrangler": "4.152.0"
+  }
+}

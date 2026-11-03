@@ -1,0 +1,3 @@
+#!/bin/sh
+# push 前の点検。中身は scripts/check-push.cjs
+exec node "$(git rev-parse --show-toplevel)/scripts/check-push.cjs"

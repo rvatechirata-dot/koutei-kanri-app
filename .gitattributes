@@ -1,0 +1,2 @@
+# push 前の点検は改行を LF のままにする（CRLF になると動かない）
+.githooks/pre-push text eol=lf

@@ -1,0 +1,48 @@
+@import "tailwindcss";
+
+/* WEBデザインルール（2026-09-13）の土台。文字は黒・強調色は青1色・本文16px。 */
+@theme {
+  --color-ink: #1A1A1A;      /* 文字 */
+  --color-ink-sub: #666666;  /* 補足の文字 */
+  --color-line: #DDDDDD;     /* 区切り線・枠 */
+  --color-card: #F4F4F4;     /* カード・表の見出し行 */
+  --color-accent: #1F5FBF;   /* 強調色 */
+  --color-danger: #C2381F;   /* エラー・削除・納期遅れ */
+  --color-ok: #17734A;       /* 完了・正常 */
+  --color-warn-bg: #FFF4CC;  /* 注意の背景（文字は黒） */
+  --font-sans: system-ui, -apple-system, "Segoe UI", Meiryo, "Hiragino Sans", "Noto Sans JP", sans-serif;
+}
+
+:root { color-scheme: light; }
+body { color: var(--color-ink); background: #FFFFFF; line-height: 1.25; -webkit-text-size-adjust: 100%; }
+
+/* ご意見#74（2026-10-28）：一覧表を1行おきに色分けする（Excelのテーブルと同じ見え方・出来高アプリと同じ色）。
+   @layer base に置くので、行やマスに自分で色を付けている所（選択中・NG・合計行など）はそちらが優先される。
+   入力様式・グラフなど色分けしない表は <table className="no-stripe">。印刷には出さない */
+@theme {
+  --color-stripe: #EAF1FB;
+}
+@layer base {
+  @media screen {
+    :where(table:not(.no-stripe) > tbody > tr:nth-child(even)) {
+      background-color: var(--color-stripe);
+    }
+  }
+}
+
+/* 表の箱と、表の上の横スクロールバー（components/ScrollWrap.tsx・可動率ダッシュボードと同じ部品）。
+   マウスの無い画面（スマホ・タブレット）はスクロールバーが出ないので、上のバーも出さない（タッチもできるPCでは出す） */
+.tbl-wrap {
+  overflow-x: auto;
+}
+.tbl-topbar {
+  overflow-x: auto;
+  overflow-y: hidden;
+  height: 16px;
+  margin-bottom: 4px;
+}
+@media (hover: none) and (pointer: coarse) {
+  .tbl-topbar {
+    display: none;
+  }
+}

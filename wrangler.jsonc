@@ -1,0 +1,46 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "koutei-kanri-app",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2026-06-01",
+  "compatibility_flags": ["nodejs_compat"],
+  // 重要: Access認証をバイパスされないよう preview URL は必ず無効化（社内ルール）
+  "preview_urls": false,
+  "workers_dev": true,
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    // 右下「ご意見」ボタンのアプリ名・Worker名（送り先は services の feedback-relay。秘密はアプリに持たせない）
+    "FEEDBACK_APP_NAME": "工程管理",
+    "FEEDBACK_APP_KEY": "koutei-kanri-app",
+    "FEEDBACK_COMPANY": "rvatec",
+    // 管理者（CSVの取り込み・操作ログ）。カンマ区切り。ほかの社員は工程一覧を見るだけ
+    //   新アプリの管理者の標準＝平田・川﨑有哉（リバ側）
+    "ADMIN_EMAILS": "hirata@rvatec.com,kawasaki-yu@rvatec.com"
+  },
+  "services": [
+    // 「ご意見」の送り先＝同じアカウント内の中継Worker（feedback-relay）
+    { "binding": "FEEDBACK", "service": "feedback-relay" }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "koutei-kanri-db",
+      // ⚠ 本番のデータベースはまだ作っていない（2026-11-03 時点は手元の開発用だけ）。
+      //   最初に公開するとき `npx wrangler d1 create koutei-kanri-db` で作り、出てきた id をここに入れる
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    },
+    {
+      // 全社マスタ(master-app)のDB。ログインした人の名前を引くためだけに読む（employees。書かない）
+      "binding": "MASTER_DB",
+      "database_name": "master-db",
+      "database_id": "ed7bcb51-7cb8-4b3f-8689-edbce6651c14"
+    }
+  ]
+}
