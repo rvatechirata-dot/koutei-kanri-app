@@ -11,7 +11,8 @@
  *   - 押した時刻はサーバーの時計（端末の時計がずれていても同じ時刻になる）。送信待ちの列（離れたところで押しためる）は持たない
  *   - 作業者はログインした人（共有メールのときだけ、一覧から選んだ人）。他人の名前では押せない
  *   - 同じ操作が2回届いたときは、実績記録の「操作の札」で見分けて1回分にする
- * 出荷の分納・出荷の取り消し・エムネットの作業ログの取り込みは3段目。
+ * 3段目：'ship'（分納＝工程は完了にせず出荷だけ記録。何回でも）・'unship'（出荷を取り消す。工程の完了はそのまま）。
+ * エムネットの作業ログの取り込みは worklog.ts。
  */
 import type { ProcRow } from "./types";
 import { sortProcs, stockRole } from "./rules";
@@ -32,8 +33,9 @@ export interface ShipInput {
 }
 
 export interface Act {
-  op: "start" | "done" | "undoStart" | "undoDone" | "pMemo" | "wStart" | "wAdd" | "wEnd" | "wEdit" | "wUndo";
+  op: "start" | "done" | "undoStart" | "undoDone" | "pMemo" | "wStart" | "wAdd" | "wEnd" | "wEdit" | "wUndo" | "ship" | "unship";
   pid?: string; // 工程ID
+  sid?: string; // 出荷ID（unship）
   wid?: string; // 作業ID（wEnd・wEdit・wUndo）
   qty?: string; // 完成数量（良品）。出荷の工程の完了では今回出荷する数
   ng?: string; // 不良数
@@ -102,7 +104,11 @@ export async function applyActs(db: Db, p: { acts: Act[]; worker: string; accoun
   const wFound = wids.length
     ? ((await db.prepare("SELECT * FROM works WHERE id IN (SELECT value FROM json_each(?))").bind(JSON.stringify(wids)).all<WorkRow>()).results)
     : [];
-  const pids = [...new Set([...acts.map((a) => txt(a.pid)).filter(Boolean), ...wFound.map((w) => w.process_id)])];
+  const sids = acts.map((a) => txt(a.sid)).filter(Boolean);
+  const sFound = sids.length
+    ? (await db.prepare("SELECT id, process_id, canceled_at FROM shipments WHERE id IN (SELECT value FROM json_each(?))").bind(JSON.stringify(sids)).all<{ id: string; process_id: string; canceled_at: string }>()).results
+    : [];
+  const pids = [...new Set([...acts.map((a) => txt(a.pid)).filter(Boolean), ...wFound.map((w) => w.process_id), ...sFound.map((s) => s.process_id)])];
   const seed = pids.length
     ? (await db.prepare("SELECT DISTINCT item_id FROM processes WHERE id IN (SELECT value FROM json_each(?))").bind(JSON.stringify(pids)).all<{ item_id: string }>()).results
     : [];
@@ -155,10 +161,38 @@ export async function applyActs(db: Db, p: { acts: Act[]; worker: string; accoun
 
   type Plan =
     | { kind: "work"; op: "wEnd" | "wEdit" | "wUndo"; w: WorkRow; f: { qty: string; ng: string; memo: string; s: string; e: string; mc: string; why: string } }
-    | { kind: "proc"; op: string; r: ProcRow; set: Partial<ProcRow>; qty: string; wid?: string; f?: { qty: string; ng: string; memo: string; why: string; mc: string }; ship?: ShipInput | null };
+    | { kind: "proc"; op: string; r: ProcRow; set: Partial<ProcRow>; qty: string; wid?: string; f?: { qty: string; ng: string; memo: string; why: string; mc: string }; ship?: ShipInput | null }
+    | { kind: "unship"; sid: string };
   const plan: Plan[] = [];
+  // 出荷の欄をそろえる（出荷日が無ければ今日・担当者が無ければ作業者）
+  const shipFields = (x: ShipInput | undefined): ShipInput => ({
+    ship_date: txt(x?.ship_date) || when.slice(0, 10),
+    dest: txt(x?.dest),
+    contact: txt(x?.contact) || worker,
+    packages: txt(x?.packages),
+    carrier: txt(x?.carrier),
+    slip_no: txt(x?.slip_no),
+    time_spec: txt(x?.time_spec),
+    note: txt(x?.note),
+    from_stock: txt(x?.from_stock) === "1" ? "1" : "",
+  });
 
   for (const a of acts) {
+    if (a.op === "unship") {
+      // 出荷の取り消し（工程の完了はそのまま）
+      const sid = txt(a.sid);
+      const f = sFound.find((x) => x.id === sid);
+      if (!f) {
+        errs.push("出荷の記録が見つかりません");
+        continue;
+      }
+      if (f.canceled_at || !ships.some((x) => x.id === sid)) {
+        skipped.push("この出荷は、もう取り消されていました");
+        continue;
+      }
+      plan.push({ kind: "unship", sid });
+      continue;
+    }
     if (a.op === "wEnd" || a.op === "wEdit" || a.op === "wUndo") {
       const w = wAll.find((x) => x.id === txt(a.wid));
       if (!w) {
@@ -258,18 +292,7 @@ export async function applyActs(db: Db, p: { acts: Act[]; worker: string; accoun
       }
       let ship: ShipInput | null = null;
       if (isShip && Number(qty) > 0) {
-        const x = a.ship || {};
-        ship = {
-          ship_date: txt(x.ship_date) || when.slice(0, 10),
-          dest: txt(x.dest),
-          contact: txt(x.contact) || worker,
-          packages: txt(x.packages),
-          carrier: txt(x.carrier),
-          slip_no: txt(x.slip_no),
-          time_spec: txt(x.time_spec),
-          note: txt(x.note),
-          from_stock: txt(x.from_stock) === "1" ? "1" : "",
-        };
+        ship = shipFields(a.ship);
         if (!/^\d{4}\/\d{2}\/\d{2}$/.test(ship.ship_date!)) {
           errs.push(`${name}：出荷日の形がおかしいです（${ship.ship_date}）`);
           continue;
@@ -286,6 +309,31 @@ export async function applyActs(db: Db, p: { acts: Act[]; worker: string; accoun
       if (a.memo !== undefined) set.comment = txt(a.memo);
       if (a.why !== undefined) set.defect_reason = Number(set.defect_qty) > 0 ? txt(a.why) : "";
       plan.push({ kind: "proc", r, set, op: "完了", qty, ship });
+    } else if (a.op === "ship") {
+      // 分納：工程は作業中のまま、出荷だけ記録する（何回でも）
+      if (e) {
+        skipped.push(`${name}：ほかの人が先に完了していました（${e}）`);
+        continue;
+      }
+      if (!isShip) {
+        errs.push(`${name}：出荷の工程ではないので、出荷を記録できません`);
+        continue;
+      }
+      const qty = txt(a.qty);
+      if (!/^\d+(\.\d+)?$/.test(qty) || !(Number(qty) > 0)) {
+        errs.push(`${name}：出荷の数は1以上の数字にしてください（${qty}）`);
+        continue;
+      }
+      const ship = shipFields(a.ship);
+      if (!/^\d{4}\/\d{2}\/\d{2}$/.test(ship.ship_date!)) {
+        errs.push(`${name}：出荷日の形がおかしいです（${ship.ship_date}）`);
+        continue;
+      }
+      if (!s) {
+        set.started_at = when;
+        set.started_by = worker;
+      }
+      plan.push({ kind: "proc", r, set, op: "出荷（分納）", qty, ship });
     } else if (a.op === "undoStart") {
       if (e || s !== (b.s || "")) {
         errs.push(`${name}：画面を見ている間にほかの人が変えたので、開始を取り消しませんでした`);
@@ -356,6 +404,12 @@ export async function applyActs(db: Db, p: { acts: Act[]; worker: string; accoun
   };
 
   for (const pl of plan) {
+    if (pl.kind === "unship") {
+      const sh = ships.find((x) => x.id === pl.sid)!;
+      cancelShip(pl.sid);
+      log(sh.item_id, sh.process_id, "出荷の取り消し", sh.qty, "", "", `${sh.ship_date} ${sh.qty}個`);
+      continue;
+    }
     if (pl.kind === "work") {
       const x = pl.w;
       if (pl.op === "wUndo") {
@@ -445,7 +499,7 @@ export async function applyActs(db: Db, p: { acts: Act[]; worker: string; accoun
   const wPids = new Set<string>();
   plan.forEach((pl) => {
     if (pl.kind === "work") wPids.add(pl.w.process_id);
-    else if (pl.op === "作業の記録") wPids.add(pl.r.id);
+    else if (pl.kind === "proc" && pl.op === "作業の記録") wPids.add(pl.r.id);
   });
   const withNum = (pid: string) => wAll.filter((w) => w.process_id === pid && !w.canceled_at && (w.good_qty !== "" || w.defect_qty !== ""));
   const total = (l: WorkRow[], h: "good_qty" | "defect_qty") => round(l.reduce((t, w) => t + (Number(w[h]) || 0), 0));

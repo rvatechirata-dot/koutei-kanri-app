@@ -1,5 +1,6 @@
 import { getCurrentUser, isAdmin } from "@/lib/auth";
 import ImportPanel from "@/components/import/ImportPanel";
+import WorklogPanel from "@/components/import/WorklogPanel";
 import { getDb } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
@@ -16,6 +17,7 @@ export default async function ImportPage() {
   return (
     <div>
       <ImportPanel />
+      <WorklogPanel />
       <section className="mt-8 max-w-5xl">
         <h2 className="text-xl font-bold">取り込みの履歴（新しい30件）</h2>
         {results.length === 0 ? (

@@ -32,6 +32,8 @@ export interface BoardProc {
   works: BoardWork[];
   /** この工程で記録した出荷の数の合計（取り消したものは除く） */
   shipped: number;
+  /** この工程で記録した出荷（取り消したものは除く・古い順） */
+  ships: { id: string; ship_date: string; qty: string; carrier: string; slip_no: string; from_stock: string }[];
 }
 
 export interface BoardWork {
@@ -99,11 +101,14 @@ export async function loadBoard(db: Db): Promise<Board> {
     ),
     db.prepare("SELECT at, file FROM import_history ORDER BY id DESC LIMIT 1"),
     db.prepare("SELECT kind, name FROM masters WHERE unused = '' ORDER BY CAST(sort_order AS REAL), name"),
-    db.prepare("SELECT process_id, SUM(CAST(qty AS REAL)) AS n FROM shipments WHERE canceled_at = '' GROUP BY process_id"),
+    db.prepare("SELECT id, process_id, ship_date, qty, carrier, slip_no, from_stock FROM shipments WHERE canceled_at = '' ORDER BY ship_date, recorded_at"),
   ]);
   const shipped: Record<string, number> = {};
-  (shp.results as { process_id: string; n: number }[]).forEach((r) => {
-    shipped[r.process_id] = Number(r.n) || 0;
+  const shipsBy: Record<string, BoardProc["ships"]> = {};
+  (shp.results as unknown as (BoardProc["ships"][number] & { process_id: string })[]).forEach((r) => {
+    const { process_id, ...rest } = r;
+    shipped[process_id] = (shipped[process_id] || 0) + (Number(r.qty) || 0);
+    (shipsBy[process_id] ||= []).push(rest);
   });
   const working: Record<string, string[]> = {};
   const worksBy: Record<string, BoardWork[]> = {};
@@ -133,7 +138,7 @@ export async function loadBoard(db: Db): Promise<Board> {
   const byItem: Record<string, BoardProc[]> = {};
   (procs.results as unknown as (BoardProc & { item_id: string })[]).forEach((p) => {
     const { item_id, ...rest } = p;
-    (byItem[item_id] ||= []).push({ ...rest, working: working[p.id] ?? [], works: worksBy[p.id] ?? [], shipped: shipped[p.id] ?? 0 });
+    (byItem[item_id] ||= []).push({ ...rest, working: working[p.id] ?? [], works: worksBy[p.id] ?? [], shipped: Math.round((shipped[p.id] ?? 0) * 1000) / 1000, ships: shipsBy[p.id] ?? [] });
   });
   const list = (items.results as unknown as Omit<BoardItem, "procs">[]).map((it) => ({ ...it, procs: sortProcs(byItem[it.id] ?? []) }));
   const last = (imp.results as { at: string; file: string }[])[0] ?? null;

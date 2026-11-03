@@ -59,6 +59,8 @@ export default async function RootLayout({
             </Link>
             <nav className="flex flex-wrap items-center gap-4 text-base">
               <Link href="/board" className="flex min-h-11 items-center text-accent underline-offset-4 hover:underline">工程一覧</Link>
+              <Link href="/ship" className="flex min-h-11 items-center text-accent underline-offset-4 hover:underline">出荷</Link>
+              <Link href="/stock" className="flex min-h-11 items-center text-accent underline-offset-4 hover:underline">在庫</Link>
               {isAdmin(user) && <Link href="/import" className="flex min-h-11 items-center text-accent underline-offset-4 hover:underline">CSV取り込み</Link>}
               {isAdmin(user) && <Link href="/logs" className="flex min-h-11 items-center text-accent underline-offset-4 hover:underline">操作ログ</Link>}
             </nav>

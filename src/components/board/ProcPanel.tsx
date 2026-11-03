@@ -10,17 +10,15 @@ import { useState } from "react";
 import type { BoardItem, BoardProc, BoardWork } from "@/lib/kotei/board";
 import type { Act } from "@/lib/kotei/acts";
 import { stockRole } from "@/lib/kotei/rules";
-import { todayJst } from "@/lib/kotei/time";
+import ShipForm from "./ShipForm";
 
 export type Send = (acts: Act[], doneMsg: string) => Promise<boolean>;
 
-const CARRIERS = ["ヤマト運輸", "佐川急便", "西濃運輸", "福山通運", "日本郵便", "自社便", "持参"];
 const BTN = "min-h-11 rounded-lg px-4 text-base font-bold disabled:opacity-50";
 const MAIN = `${BTN} bg-accent text-white`;
 const SUB = `${BTN} border border-accent bg-white text-accent`;
 const DANGER = `${BTN} border border-danger bg-white text-danger`;
 const INPUT = "min-h-11 rounded border border-ink-sub bg-white px-2 text-base";
-const fmt = (n: number) => String(Math.round(n * 1000) / 1000);
 
 export default function ProcPanel({
   it,
@@ -43,13 +41,11 @@ export default function ProcPanel({
   const isShip = role?.ship === p.id;
   const done = !!p.done_at;
   const started = !!p.started_at;
-  const left = Math.max(0, (Number(it.qty) || 0) - p.shipped);
   const [busy, setBusy] = useState(false);
-  const [qty, setQty] = useState(isShip ? fmt(left) : p.done_qty || it.qty || "");
+  const [qty, setQty] = useState(p.done_qty || it.qty || "");
   const [ng, setNg] = useState(p.defect_qty || "");
   const [why, setWhy] = useState("");
   const [memo, setMemo] = useState(p.comment || "");
-  const [ship, setShip] = useState({ ship_date: todayJst(), carrier: "", slip_no: "", from_stock: "" });
   const [mc, setMc] = useState(p.machine || "");
 
   const run = async (acts: Act[], msg: string) => {
@@ -65,7 +61,6 @@ export default function ProcPanel({
     ng,
     memo,
     why: Number(ng) > 0 ? why : "",
-    ...(isShip ? { ship } : {}),
   });
 
   const live = p.works;
@@ -96,49 +91,46 @@ export default function ProcPanel({
       </div>
 
       {/* ── 工程の開始・完了 ── */}
-      {!done && (
+      {!done && isShip && (
+        <div className="mt-4">
+          <ShipForm pid={p.id} name={p.name} qty={Number(it.qty) || 0} shipped={p.shipped} worker={worker} busy={busy} run={run} />
+          <ShipList p={p} busy={busy} run={run} />
+          <div className="mt-4 flex flex-wrap gap-2">
+            {!started && (
+              <button type="button" disabled={busy} onClick={() => run([{ op: "start", pid: p.id }], `${p.name}を開始にしました`)} className={SUB}>
+                ▶ 工程の開始
+              </button>
+            )}
+            {started && (
+              <button
+                type="button"
+                disabled={busy || p.ships.length > 0}
+                title={p.ships.length ? "出荷の記録があるので取り消せません（先に出荷を取り消してください）" : ""}
+                onClick={() => run([{ op: "undoStart", pid: p.id, base: { s: p.started_at, e: p.done_at } }], "開始を取り消しました")}
+                className={DANGER}
+              >
+                工程の開始を取り消す
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+      {!done && !isShip && (
         <div className="mt-4 rounded-lg bg-card p-4">
           <div className="flex flex-wrap items-end gap-4">
             <label className="flex flex-col gap-2 text-sm">
-              {isShip ? `出荷する数（残り ${fmt(left)}）` : "工程の完成数量（良品）"}
+              工程の完成数量（良品）
               <input value={qty} onChange={(e) => setQty(e.target.value)} inputMode="decimal" className={`${INPUT} w-32 text-right`} />
             </label>
-            {!isShip && (
-              <label className="flex flex-col gap-2 text-sm">
-                不良数
-                <input value={ng} onChange={(e) => setNg(e.target.value)} inputMode="decimal" className={`${INPUT} w-24 text-right`} />
-              </label>
-            )}
+            <label className="flex flex-col gap-2 text-sm">
+              不良数
+              <input value={ng} onChange={(e) => setNg(e.target.value)} inputMode="decimal" className={`${INPUT} w-24 text-right`} />
+            </label>
             {Number(ng) > 0 && (
               <label className="flex flex-col gap-2 text-sm">
                 不良の理由
                 <ReasonSelect value={why} onChange={setWhy} reasons={lists.reasons} />
               </label>
-            )}
-            {isShip && (
-              <>
-                <label className="flex flex-col gap-2 text-sm">
-                  出荷日
-                  <input value={ship.ship_date} onChange={(e) => setShip({ ...ship, ship_date: e.target.value })} className={`${INPUT} w-36`} placeholder="2026/11/04" />
-                </label>
-                <label className="flex flex-col gap-2 text-sm">
-                  配送業者
-                  <select value={ship.carrier} onChange={(e) => setShip({ ...ship, carrier: e.target.value })} className={INPUT}>
-                    <option value="">（選ぶ）</option>
-                    {CARRIERS.map((c) => (
-                      <option key={c}>{c}</option>
-                    ))}
-                  </select>
-                </label>
-                <label className="flex flex-col gap-2 text-sm">
-                  伝票番号
-                  <input value={ship.slip_no} onChange={(e) => setShip({ ...ship, slip_no: e.target.value })} className={`${INPUT} w-40`} />
-                </label>
-                <label className="flex min-h-11 items-center gap-2 text-base">
-                  <input type="checkbox" checked={ship.from_stock === "1"} onChange={(e) => setShip({ ...ship, from_stock: e.target.checked ? "1" : "" })} className="h-5 w-5" />
-                  在庫から出した
-                </label>
-              </>
             )}
           </div>
           <label className="mt-4 flex flex-col gap-2 text-sm">
@@ -154,13 +146,10 @@ export default function ProcPanel({
             <button
               type="button"
               disabled={busy}
-              onClick={() => {
-                if (isShip && Number(qty) < left && !confirm(`出荷する数（${qty}）が残り（${fmt(left)}）より少ないまま、出荷の工程を完了にします。よろしいですか？`)) return;
-                run([doneAct()], `${p.name}を完了にしました`);
-              }}
+              onClick={() => run([doneAct()], `${p.name}を完了にしました`)}
               className={MAIN}
             >
-              ✔ 工程の完了{isShip ? "（出荷を記録）" : ""}
+              ✔ 工程の完了
             </button>
             <button type="button" disabled={busy} onClick={() => run([{ op: "pMemo", pid: p.id, memo }], "コメントを保存しました")} className={SUB}>
               コメントだけ保存
@@ -179,6 +168,7 @@ export default function ProcPanel({
           </div>
         </div>
       )}
+      {done && isShip && <ShipList p={p} busy={busy} run={run} />}
       {done && (
         <div className="mt-4 flex flex-wrap gap-2">
           <button
@@ -422,6 +412,36 @@ function AddWork({
       <button type="button" onClick={() => setOpen(false)} className={SUB}>
         やめる
       </button>
+    </div>
+  );
+}
+
+/** この工程で記録した出荷（取り消していないもの）。1件ずつ取り消せる（工程の完了はそのまま） */
+function ShipList({ p, busy, run }: { p: BoardProc; busy: boolean; run: (acts: Act[], msg: string) => Promise<boolean> }) {
+  if (!p.ships.length) return null;
+  return (
+    <div className="mt-4">
+      <h4 className="text-base font-bold">この工程の出荷（{p.ships.length}件）</h4>
+      <div className="mt-2 flex flex-col gap-2">
+        {p.ships.map((s) => (
+          <div key={s.id} className="flex flex-wrap items-center gap-4 rounded border border-line p-2 text-base">
+            <span>
+              {s.ship_date}　<b>{s.qty}個</b>
+              {s.carrier && `　${s.carrier}`}
+              {s.slip_no && `　${s.slip_no}`}
+              {s.from_stock === "1" && "　（在庫から）"}
+            </span>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => confirm(`${s.ship_date} ${s.qty}個の出荷を取り消します。よろしいですか？`) && run([{ op: "unship", sid: s.id }], "出荷を取り消しました")}
+              className={`${DANGER} ml-auto`}
+            >
+              この出荷を取り消す
+            </button>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

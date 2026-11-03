@@ -5,8 +5,8 @@ import { masterMap, normOne } from "@/lib/kotei/rules";
 
 export const dynamic = "force-dynamic";
 
-const OPS = new Set(["start", "done", "undoStart", "undoDone", "pMemo", "wStart", "wAdd", "wEnd", "wEdit", "wUndo"]);
-const STR_KEYS = ["pid", "wid", "qty", "ng", "memo", "why", "mc", "s", "e"] as const;
+const OPS = new Set(["start", "done", "undoStart", "undoDone", "pMemo", "wStart", "wAdd", "wEnd", "wEdit", "wUndo", "ship", "unship"]);
+const STR_KEYS = ["pid", "wid", "sid", "qty", "ng", "memo", "why", "mc", "s", "e"] as const;
 const SHIP_KEYS = ["ship_date", "dest", "contact", "packages", "carrier", "slip_no", "time_spec", "note", "from_stock"] as const;
 
 /** 送られてきた操作を、決まった項目だけの形にする（知らない項目は捨てる） */
