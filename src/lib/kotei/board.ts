@@ -4,6 +4,7 @@
  * 単価・顧客の担当者・納品情報は工程一覧では使わないので送らない（見せる必要の無いものは出さない）。
  */
 import { sortProcs } from "./rules";
+import { workMark } from "./acts";
 
 type Db = D1Database;
 
@@ -22,10 +23,31 @@ export interface BoardProc {
   started_by: string;
   done_by: string;
   defect_qty: string;
+  defect_reason: string;
   comment: string;
   note: string;
   /** いま作業中の人（取り消していない・終わっていない作業） */
   working: string[];
+  /** 取り消していない作業（古い順） */
+  works: BoardWork[];
+  /** この工程で記録した出荷の数の合計（取り消したものは除く） */
+  shipped: number;
+}
+
+export interface BoardWork {
+  id: string;
+  worker: string;
+  account: string;
+  started_at: string;
+  ended_at: string;
+  good_qty: string;
+  defect_qty: string;
+  comment: string;
+  machine: string;
+  defect_reason: string;
+  source_key: string;
+  /** 作業を直すときに「画面が見ていた行」を伝える印 */
+  mark: string;
 }
 
 export interface BoardItem {
@@ -52,12 +74,14 @@ export interface BoardItem {
 
 export interface Board {
   ver: string;
+  /** 基本の一覧（使わないものを除く）。作業者・機械・不良の理由の候補 */
+  lists: { workers: string[]; machines: string[]; reasons: string[] };
   lastImport: { at: string; file: string } | null;
   items: BoardItem[];
 }
 
 export async function loadBoard(db: Db): Promise<Board> {
-  const [ver, items, procs, works, imp] = await db.batch([
+  const [ver, items, procs, works, imp, mst, shp] = await db.batch([
     db.prepare("SELECT value FROM settings WHERE key = 'ver'"),
     db.prepare(
       `SELECT i.id, i.barcode, i.kubun, i.drawing_no, i.name, i.qty, i.final_due, i.hidden, i.knowhow, i.note, i.source, i.case_id,
@@ -67,22 +91,51 @@ export async function loadBoard(db: Db): Promise<Board> {
     ),
     db.prepare(
       `SELECT id, item_id, seq, in_out, name, assignee, machine, plan_start, due, started_at, done_at, done_qty,
-              started_by, done_by, defect_qty, comment, note FROM processes`
+              started_by, done_by, defect_qty, defect_reason, comment, note FROM processes`
     ),
-    db.prepare("SELECT process_id, worker FROM works WHERE ended_at = '' AND canceled_at = ''"),
+    db.prepare(
+      `SELECT id, process_id, worker, account, started_at, ended_at, good_qty, defect_qty, comment, machine, defect_reason, source_key, canceled_at
+         FROM works WHERE canceled_at = '' ORDER BY started_at, id`
+    ),
     db.prepare("SELECT at, file FROM import_history ORDER BY id DESC LIMIT 1"),
+    db.prepare("SELECT kind, name FROM masters WHERE unused = '' ORDER BY CAST(sort_order AS REAL), name"),
+    db.prepare("SELECT process_id, SUM(CAST(qty AS REAL)) AS n FROM shipments WHERE canceled_at = '' GROUP BY process_id"),
   ]);
+  const shipped: Record<string, number> = {};
+  (shp.results as { process_id: string; n: number }[]).forEach((r) => {
+    shipped[r.process_id] = Number(r.n) || 0;
+  });
   const working: Record<string, string[]> = {};
-  (works.results as { process_id: string; worker: string }[]).forEach((w) => {
-    const list = (working[w.process_id] ||= []);
+  const worksBy: Record<string, BoardWork[]> = {};
+  (works.results as unknown as (Omit<BoardWork, "mark"> & { process_id: string; canceled_at: string })[]).forEach((w) => {
+    const { process_id, canceled_at, ...rest } = w;
+    (worksBy[process_id] ||= []).push({ ...rest, mark: workMark({ ...rest, canceled_at }) });
+    if (w.ended_at) return;
+    const list = (working[process_id] ||= []);
     if (w.worker && !list.includes(w.worker)) list.push(w.worker);
   });
+  const lists = { workers: [] as string[], machines: [] as string[], reasons: [] as string[] };
+  (mst.results as { kind: string; name: string }[]).forEach((m) => {
+    if (m.kind === "作業者") lists.workers.push(m.name);
+    if (m.kind === "機械") lists.machines.push(m.name);
+    if (m.kind === "不良の理由") lists.reasons.push(m.name);
+  });
+  // 基本の一覧に作業者がまだ無いときは、今あるデータに出てくる名前を候補にする（試作と同じ）
+  if (!lists.workers.length) {
+    const seen = new Set<string>();
+    (works.results as { worker: string }[]).forEach((w) => w.worker && seen.add(w.worker));
+    (procs.results as { started_by: string; done_by: string }[]).forEach((p) => {
+      if (p.started_by) seen.add(p.started_by);
+      if (p.done_by) seen.add(p.done_by);
+    });
+    lists.workers = [...seen].sort((a, b) => a.localeCompare(b, "ja"));
+  }
   const byItem: Record<string, BoardProc[]> = {};
   (procs.results as unknown as (BoardProc & { item_id: string })[]).forEach((p) => {
     const { item_id, ...rest } = p;
-    (byItem[item_id] ||= []).push({ ...rest, working: working[p.id] ?? [] });
+    (byItem[item_id] ||= []).push({ ...rest, working: working[p.id] ?? [], works: worksBy[p.id] ?? [], shipped: shipped[p.id] ?? 0 });
   });
   const list = (items.results as unknown as Omit<BoardItem, "procs">[]).map((it) => ({ ...it, procs: sortProcs(byItem[it.id] ?? []) }));
   const last = (imp.results as { at: string; file: string }[])[0] ?? null;
-  return { ver: (ver.results as { value: string }[])[0]?.value ?? "1", lastImport: last, items: list };
+  return { ver: (ver.results as { value: string }[])[0]?.value ?? "1", lists, lastImport: last, items: list };
 }

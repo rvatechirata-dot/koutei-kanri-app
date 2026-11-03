@@ -7,22 +7,31 @@
  *   色だけで伝えないよう、札の頭に「済・中・次」の字を付ける（WEBデザインルール）。外注・出荷も字で付ける。
  * 上の「今の工程ごとの数」を押すと、その工程にいる品目だけに絞る（受注がいまどこにいるかの全体像）。
  * 見方は川﨑課長の試作の工程一覧（index.html rowHtml）と同じ。
+ * 2段目：札を押すと、その品目の下に小窓（ProcPanel）が開き、開始・完了・作業を押せる。
+ *   行の左のチェックで選んだ品目の「今の工程」を、まとめて完了にできる。
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Board, BoardItem, BoardProc } from "@/lib/kotei/board";
+import type { Act } from "@/lib/kotei/acts";
 import { stockRole } from "@/lib/kotei/rules";
 import { todayJst } from "@/lib/kotei/time";
 import ScrollWrap from "@/components/ScrollWrap";
+import ProcPanel, { type Send } from "./ProcPanel";
 
 type Status = "open" | "done" | "all";
+type Me = { name: string; named: boolean; admin: boolean };
+type BoardRes = Board & { me: Me };
 
 const PAGE = 200;
 
-async function fetchBoard(): Promise<Board> {
+async function fetchBoard(): Promise<BoardRes> {
   const r = await fetch("/api/board", { cache: "no-store" });
   if (!r.ok) throw new Error(String(r.status));
-  return (await r.json()) as Board;
+  return (await r.json()) as BoardRes;
 }
+
+/** 操作の札（同じ操作が2回届いても1回分にするための印） */
+const newOpId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
 function curOf(it: BoardItem): BoardProc | null {
   return it.procs.find((p) => !p.done_at) ?? null;
@@ -49,7 +58,7 @@ interface Filters {
 const EMPTY: Filters = { q: "", cur: "", status: "open", hidden: false, late: false };
 
 export default function BoardView() {
-  const [board, setBoard] = useState<Board | null>(null);
+  const [board, setBoard] = useState<BoardRes | null>(null);
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
   // 絞り込みは端末ごとに覚える。データが届くまで画面には出ないので、最初から覚えた値で始める
@@ -65,8 +74,27 @@ export default function BoardView() {
     }
   };
   const [open, setOpen] = useState<string | null>(null);
+  const [panel, setPanel] = useState<{ item: string; pid: string } | null>(null);
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const [toast, setToast] = useState<{ text: string; bad?: boolean } | null>(null);
+  // 共有メールでログインしたときだけ、端末で作業者を選ぶ（端末ごとに覚える）
+  const [pick, setPickState] = useState<string>(() => {
+    try {
+      return typeof window === "undefined" ? "" : localStorage.getItem("koutei:worker") || "";
+    } catch {
+      return "";
+    }
+  });
+  const setPick = (v: string) => {
+    setPickState(v);
+    try {
+      localStorage.setItem("koutei:worker", v);
+    } catch {
+      // 覚えられなくても動く
+    }
+  };
 
-  const show = useCallback((p: Promise<Board>) => {
+  const show = useCallback((p: Promise<BoardRes>) => {
     return p
       .then((b) => {
         setBoard(b);
@@ -83,6 +111,24 @@ export default function BoardView() {
   useEffect(() => {
     show(fetchBoard());
   }, [show]);
+
+  // ほかの人が押した内容を見せるため、画面が出ている間は1分ごとに更新番号だけ確かめ、変わっていたら読み直す
+  const ver = board?.ver;
+  useEffect(() => {
+    if (!ver) return;
+    const t = setInterval(async () => {
+      if (document.visibilityState !== "visible") return;
+      try {
+        const r = await fetch(`/api/board?ver=${encodeURIComponent(ver)}`, { cache: "no-store" });
+        if (!r.ok) return;
+        const j = (await r.json()) as BoardRes | { same: true };
+        if (!("same" in j)) setBoard(j);
+      } catch {
+        // つながらないときは次の回にまた確かめる
+      }
+    }, 60_000);
+    return () => clearInterval(t);
+  }, [ver]);
 
   const today = todayJst();
   const base = useMemo(() => {
@@ -130,6 +176,57 @@ export default function BoardView() {
   if (!board) {
     return <p className="py-8 text-base text-ink-sub">{err || "読み込み中…"}</p>;
   }
+  const me = board.me;
+  const worker = me.named ? me.name : pick;
+
+  const send: Send = async (acts: Act[], doneMsg: string) => {
+    if (!worker) {
+      setToast({ text: "画面の上で作業者を選んでから押してください。", bad: true });
+      return false;
+    }
+    try {
+      const r = await fetch("/api/acts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ acts, worker: me.named ? undefined : pick, opId: newOpId() }),
+      });
+      const j = (await r.json()) as { error?: string; skipped?: string[] };
+      if (!r.ok) {
+        setToast({ text: (j.error || `保存できませんでした（${r.status}）`) + "（何も保存されていません）", bad: true });
+        await show(fetchBoard());
+        return false;
+      }
+      setToast({ text: [doneMsg, ...(j.skipped ?? [])].join("\n") });
+      await show(fetchBoard());
+      return true;
+    } catch {
+      setToast({ text: "通信できませんでした。保存されたか分からないので、「最新にする」で確かめてください。", bad: true });
+      return false;
+    }
+  };
+
+  // あなたの作業中（終えていない作業）
+  const myWorks = board.items.flatMap((it) =>
+    it.procs.flatMap((p) => p.works.filter((w) => !w.ended_at && w.worker === worker).map((w) => ({ it, p, w })))
+  );
+
+  // まとめて完了：選んだ品目の「今の工程」を、品目の数量で完了にする（出荷の工程は残りの数で出荷を記録）
+  const bulk = async () => {
+    const targets = rows
+      .filter((it) => sel.has(it.id))
+      .map((it) => ({ it, c: curOf(it) }))
+      .filter((x): x is { it: BoardItem; c: BoardProc } => !!x.c);
+    if (!targets.length) return;
+    const lines = targets.slice(0, 15).map((x) => `・${x.it.mgmt_no} ${x.it.drawing_no}：${x.c.name}`);
+    const more = targets.length > 15 ? "\n…" : "";
+    if (!confirm(`${targets.length}件の「今の工程」を完了にします（数は品目の数量）。\n${lines.join("\n")}${more}\nよろしいですか？`)) return;
+    const acts: Act[] = targets.map(({ it, c }) => {
+      const isShip = stockRole(it.kubun, it.procs)?.ship === c.id;
+      const qty = isShip ? String(Math.max(0, (Number(it.qty) || 0) - c.shipped)) : c.done_qty || it.qty || "0";
+      return { op: "done", pid: c.id, qty, ng: c.defect_qty, why: c.defect_reason, ...(isShip ? { ship: { ship_date: todayJst() } } : {}) };
+    });
+    if (await send(acts, `${targets.length}件を完了にしました`)) setSel(new Set());
+  };
 
   return (
     <div>
@@ -143,6 +240,58 @@ export default function BoardView() {
         </button>
       </div>
       {err && <p className="mt-2 rounded border border-danger bg-white p-2 text-base text-danger">{err}</p>}
+      {toast && (
+        // 小窓で押したときも見えるよう、画面の下の方に重ねて出す（右下の「ご意見」ボタンにかからない高さ）
+        <div
+          role="status"
+          className={`fixed inset-x-4 bottom-20 z-40 mx-auto flex max-w-2xl items-start gap-4 rounded-lg border-2 bg-white p-4 text-base shadow-lg ${toast.bad ? "border-danger text-danger" : "border-ok"}`}
+        >
+          <p className="whitespace-pre-wrap">{toast.text}</p>
+          <button type="button" onClick={() => setToast(null)} className="ml-auto min-h-11 rounded-lg border border-line px-4 text-base text-ink">
+            閉じる
+          </button>
+        </div>
+      )}
+      <div className="mt-2 flex flex-wrap items-center gap-4 text-base">
+        {me.named ? (
+          <p>
+            作業者：<b>{me.name}</b>（ログインした人）
+          </p>
+        ) : (
+          <label className={`flex items-center gap-2 rounded p-2 ${pick ? "" : "border-2 border-danger"}`}>
+            作業者（共有のメールなので選んでください）
+            <select value={pick} onChange={(e) => setPick(e.target.value)} className="min-h-11 rounded border border-ink-sub bg-white px-2 text-base">
+              <option value="">（選ぶ）</option>
+              {board.lists.workers.map((w) => (
+                <option key={w}>{w}</option>
+              ))}
+            </select>
+          </label>
+        )}
+      </div>
+      {myWorks.length > 0 && (
+        <section className="mt-2 rounded-lg border border-[#B08A00] bg-warn-bg p-2">
+          <h2 className="text-base font-bold">
+            {worker}さんの作業中（{myWorks.length}件）
+          </h2>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {myWorks.map(({ it, p, w }) => (
+              <button
+                key={w.id}
+                type="button"
+                onClick={() => {
+                  setF({ ...f, q: it.mgmt_no, cur: "", status: "all" });
+                  setPanel({ item: it.id, pid: p.id });
+                }}
+                className="min-h-11 rounded-lg border border-line bg-white px-4 text-left text-base"
+              >
+                <b>{it.mgmt_no}</b> {p.name}
+                <span className="ml-2 text-sm text-ink-sub">{w.started_at.slice(5)}〜</span>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* 絞り込み */}
       <div className="mt-4 flex flex-wrap items-end gap-4 rounded-lg bg-card p-4">
@@ -204,13 +353,40 @@ export default function BoardView() {
       <div className="mt-4 flex flex-col gap-2">
         {rows.length === 0 && <p className="py-8 text-base text-ink-sub">当てはまる品目がありません。</p>}
         {rows.slice(0, limit).map((it) => (
-          <ItemRowView key={it.id} it={it} today={today} open={open === it.id} onToggle={() => setOpen(open === it.id ? null : it.id)} />
+          <ItemRowView
+            key={it.id}
+            it={it}
+            today={today}
+            open={open === it.id}
+            onToggle={() => setOpen(open === it.id ? null : it.id)}
+            panelPid={panel?.item === it.id ? panel.pid : null}
+            onChip={(pid) => setPanel(panel?.item === it.id && panel.pid === pid ? null : { item: it.id, pid })}
+            checked={sel.has(it.id)}
+            onCheck={(on) => {
+              const n = new Set(sel);
+              if (on) n.add(it.id);
+              else n.delete(it.id);
+              setSel(n);
+            }}
+            panel={(p) => <ProcPanel key={p.id} it={it} p={p} me={me} worker={worker} lists={board.lists} send={send} onClose={() => setPanel(null)} />}
+          />
         ))}
       </div>
       {rows.length > limit && (
         <button type="button" onClick={() => setLimit(limit + PAGE)} className="mt-4 min-h-11 rounded-lg border border-accent bg-white px-4 text-base font-bold text-accent">
           さらに{PAGE}件出す（あと{rows.length - limit}件）
         </button>
+      )}
+      {sel.size > 0 && (
+        <div className="sticky bottom-0 mt-4 flex flex-wrap items-center gap-4 border-t border-line bg-white py-4">
+          <p className="text-base">{sel.size}件を選んでいます</p>
+          <button type="button" onClick={bulk} className="min-h-11 rounded-lg bg-accent px-8 text-base font-bold text-white">
+            今の工程をまとめて完了
+          </button>
+          <button type="button" onClick={() => setSel(new Set())} className="min-h-11 rounded-lg border border-accent bg-white px-4 text-base font-bold text-accent">
+            選ぶのをやめる
+          </button>
+        </div>
       )}
     </div>
   );
@@ -238,7 +414,27 @@ const CHIP_STYLE = {
 };
 const MARK = { done: "済", doing: "中", next: "次", todo: "" };
 
-function ItemRowView({ it, today, open, onToggle }: { it: BoardItem; today: string; open: boolean; onToggle: () => void }) {
+function ItemRowView({
+  it,
+  today,
+  open,
+  onToggle,
+  panelPid,
+  onChip,
+  checked,
+  onCheck,
+  panel,
+}: {
+  it: BoardItem;
+  today: string;
+  open: boolean;
+  onToggle: () => void;
+  panelPid: string | null;
+  onChip: (pid: string) => void;
+  checked: boolean;
+  onCheck: (on: boolean) => void;
+  panel: (p: BoardProc) => React.ReactNode;
+}) {
   const cur = curOf(it);
   const done = isDone(it);
   const late = !!it.final_due && dateOnly(it.final_due) < today && !done;
@@ -247,7 +443,15 @@ function ItemRowView({ it, today, open, onToggle }: { it: BoardItem; today: stri
   return (
     <div className={`rounded-lg border bg-white ${late ? "border-l-8 border-l-danger border-line" : "border-line"}`}>
       <div className="flex flex-col gap-2 p-2 lg:flex-row">
-        <button type="button" onClick={onToggle} className="flex min-w-0 flex-col items-start gap-1 text-left lg:w-80 lg:shrink-0" aria-expanded={open}>
+        <div className="flex min-w-0 gap-2 lg:w-80 lg:shrink-0">
+        {cur ? (
+          <label className="flex min-h-11 min-w-11 shrink-0 items-start justify-center pt-1" title="今の工程をまとめて完了するときに選ぶ">
+            <input type="checkbox" checked={checked} onChange={(e) => onCheck(e.target.checked)} className="h-5 w-5" aria-label={`${it.mgmt_no}を選ぶ`} />
+          </label>
+        ) : (
+          <span className="min-w-11 shrink-0" />
+        )}
+        <button type="button" onClick={onToggle} className="flex min-w-0 flex-col items-start gap-1 text-left" aria-expanded={open}>
           <span className="flex flex-wrap items-center gap-2">
             <span className="text-base font-bold">{it.mgmt_no || "（管理番号なし）"}</span>
             {it.kubun && <span className="rounded border border-line px-1 text-sm">{it.kubun}</span>}
@@ -266,6 +470,7 @@ function ItemRowView({ it, today, open, onToggle }: { it: BoardItem; today: stri
             )}
           </span>
         </button>
+        </div>
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
           {it.procs.length === 0 && <span className="text-base text-ink-sub">工程なし</span>}
           {it.procs.map((p, k) => {
@@ -287,7 +492,13 @@ function ItemRowView({ it, today, open, onToggle }: { it: BoardItem; today: stri
             return (
               <span key={p.id} className="flex items-center gap-1">
                 {k > 0 && <span className="text-ink-sub" aria-hidden>›</span>}
-                <span className={`${CHIP} ${CHIP_STYLE[st]}`} title={tip}>
+                <button
+                  type="button"
+                  onClick={() => onChip(p.id)}
+                  aria-expanded={panelPid === p.id}
+                  className={`${CHIP} ${CHIP_STYLE[st]} ${panelPid === p.id ? "outline-2 outline-offset-2 outline-accent" : ""}`}
+                  title={tip}
+                >
                   <span>
                     {MARK[st] && <span className="mr-1">{MARK[st]}</span>}
                     {p.in_out === "外注" && <span className="mr-1 text-sm">外注</span>}
@@ -296,12 +507,16 @@ function ItemRowView({ it, today, open, onToggle }: { it: BoardItem; today: stri
                   </span>
                   {sub && <span className="text-sm font-normal text-ink-sub">{sub}</span>}
                   {p.working.length > 0 && <span className="text-sm font-bold">作業中{p.working.length}人</span>}
-                </span>
+                </button>
               </span>
             );
           })}
         </div>
       </div>
+      {panelPid && (() => {
+        const p = it.procs.find((x) => x.id === panelPid);
+        return p ? panel(p) : null;
+      })()}
       {open && <ItemDetail it={it} />}
     </div>
   );

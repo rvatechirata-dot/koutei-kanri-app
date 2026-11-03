@@ -10,8 +10,9 @@ const ACCESS_HEADER = "cf-access-authenticated-user-email";
  * 本番: Cloudflare Access が付与するヘッダーのメールアドレスで識別する。
  * 開発: ヘッダーが無い場合のみ、開発用Cookie（dev_user_email）で代用する。
  *
- * Access を通れた社員は全員使える（2026-10-27 平田さん決定）。アプリ側に担当者の登録は無い。
- * 管理者（INPUTを誰のものでも消せる・操作ログを見られる）は wrangler.jsonc の ADMIN_EMAILS で決める。
+ * Access を通れた社員は全員使える（工程一覧を見る・工程の開始・完了・作業を押す）。アプリ側に担当者の登録は無い。
+ * 管理者（CSVの取り込み・操作ログ・ほかの人の作業を直す）は wrangler.jsonc の ADMIN_EMAILS で決める。
+ * 作業者の名前は、ログインした人の全社マスタの名前。共有メールなどで名前が決まらない（named=false）ときだけ、画面で選んだ名前を使う。
  * 名前は全社マスタ（master-db の employees）からメールで引く。引けないときはメールのまま。
  */
 export async function getCurrentUser(): Promise<CurrentUser> {
@@ -28,7 +29,8 @@ export async function getCurrentUser(): Promise<CurrentUser> {
   }
   email = email.toLowerCase();
 
-  return { email, name: await nameOf(email), role: (await adminEmails()).includes(email) ? "admin" : "staff" };
+  const name = await nameOf(email);
+  return { email, name: name ?? email, named: name !== null, role: (await adminEmails()).includes(email) ? "admin" : "staff" };
 }
 
 /** 管理者のメール（wrangler.jsonc の vars.ADMIN_EMAILS・カンマ区切り） */
@@ -39,19 +41,19 @@ export async function adminEmails(): Promise<string[]> {
 }
 
 /**
- * 全社マスタの社員名。部署で共有しているメール（1つのメールに複数人）は誰か決まらないので、メールのまま返す。
- * 全社マスタが読めないとき（開発中など）もメールのまま。
+ * 全社マスタの社員名。部署で共有しているメール（1つのメールに複数人）は誰か決まらないので null（呼び出し側でメールのまま出す）。
+ * 全社マスタが読めないとき（開発中など）も null。
  */
-async function nameOf(email: string): Promise<string> {
+async function nameOf(email: string): Promise<string | null> {
   try {
     const mdb = await getMasterDb();
     const { results } = await mdb
       .prepare("SELECT name FROM employees WHERE lower(email) = ? AND is_active = 1 AND canonical_id IS NULL LIMIT 2")
       .bind(email)
       .all<{ name: string }>();
-    return results.length === 1 ? results[0].name : email;
+    return results.length === 1 ? results[0].name : null;
   } catch {
-    return email;
+    return null;
   }
 }
 
