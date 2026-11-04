@@ -3,7 +3,7 @@
 受注（エムネットの案件）が、いまどの工程にいるかを一目で見る。川﨑部長の試作（Apps Script 版）を作り直したもの。
 仕様は `docs/仕様書.md`。
 
-- 本番URL: まだ公開していない（公開したら https://koutei-kanri-app.rvatec-hirata.workers.dev 。Cloudflare Access で社員のみ）
+- 本番URL: https://koutei-kanri-app.rvatec-hirata.workers.dev （2026-11-04 公開・Cloudflare Access で社員のみ）
 - 構成: Next.js ＋ Cloudflare Workers（OpenNext）＋ D1（`koutei-kanri-db`）＋ Cloudflare Access
 
 ## 手元で動かす
