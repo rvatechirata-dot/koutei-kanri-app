@@ -63,7 +63,8 @@ export default async function RootLayout({
               <Link href="/stock" className="flex min-h-11 items-center text-accent underline-offset-4 hover:underline">在庫</Link>
               <Link href="/summary" className="flex min-h-11 items-center text-accent underline-offset-4 hover:underline">集計</Link>
               {isAdmin(user) && <Link href="/import" className="flex min-h-11 items-center text-accent underline-offset-4 hover:underline">CSV取り込み</Link>}
-              {isAdmin(user) && <Link href="/master" className="flex min-h-11 items-center text-accent underline-offset-4 hover:underline">基本の一覧</Link>}
+              {isAdmin(user) && <Link href="/cases" className="flex min-h-11 items-center text-accent underline-offset-4 hover:underline">案件</Link>}
+              {isAdmin(user) && <Link href="/master"className="flex min-h-11 items-center text-accent underline-offset-4 hover:underline">基本の一覧</Link>}
               {isAdmin(user) && <Link href="/logs" className="flex min-h-11 items-center text-accent underline-offset-4 hover:underline">操作ログ</Link>}
             </nav>
             <div className="ml-auto text-sm text-ink-sub">

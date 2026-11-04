@@ -11,6 +11,7 @@
  *   行の左のチェックで選んだ品目の「今の工程」を、まとめて完了にできる。
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import type { Board, BoardItem, BoardProc } from "@/lib/kotei/board";
 import type { Act } from "@/lib/kotei/acts";
 import { stockRole } from "@/lib/kotei/rules";
@@ -369,6 +370,7 @@ export default function BoardView() {
               setSel(n);
             }}
             panel={(p) => <ProcPanel key={p.id} it={it} p={p} me={me} worker={worker} lists={board.lists} send={send} onClose={() => setPanel(null)} />}
+            admin={me.admin}
           />
         ))}
       </div>
@@ -424,6 +426,7 @@ function ItemRowView({
   checked,
   onCheck,
   panel,
+  admin,
 }: {
   it: BoardItem;
   today: string;
@@ -434,6 +437,7 @@ function ItemRowView({
   checked: boolean;
   onCheck: (on: boolean) => void;
   panel: (p: BoardProc) => React.ReactNode;
+  admin: boolean;
 }) {
   const cur = curOf(it);
   const done = isDone(it);
@@ -517,14 +521,19 @@ function ItemRowView({
         const p = it.procs.find((x) => x.id === panelPid);
         return p ? panel(p) : null;
       })()}
-      {open && <ItemDetail it={it} />}
+      {open && <ItemDetail it={it} admin={admin} />}
     </div>
   );
 }
 
-function ItemDetail({ it }: { it: BoardItem }) {
+function ItemDetail({ it, admin }: { it: BoardItem; admin: boolean }) {
   return (
     <div className="border-t border-line p-4">
+      {admin && (
+        <Link href={`/cases?id=${encodeURIComponent(it.case_id)}`} className="mb-4 inline-flex min-h-11 items-center rounded-lg border border-accent px-4 text-base font-bold text-accent">
+          この案件を直す（品目・工程の並び）
+        </Link>
+      )}
       <dl className="grid grid-cols-1 gap-x-8 gap-y-2 text-base sm:grid-cols-2 lg:grid-cols-3">
         <Info k="バーコード番号" v={it.barcode} />
         <Info k="顧客発注番号" v={it.customer_po} />
