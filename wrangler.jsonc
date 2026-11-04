@@ -8,8 +8,8 @@
   "compatibility_flags": ["nodejs_compat"],
   // 重要: Access認証をバイパスされないよう preview URL は必ず無効化（社内ルール）
   "preview_urls": false,
-  // ⚠ 最初の公開は false（Cloudflare Access に登録するまで外から開けないように）。登録して社外から302を確かめてから true にする
-  "workers_dev": false,
+  // 2026-11-04 Cloudflare Access に登録済み（平田さん）。公開したら社外から302を確かめる。200なら false にして出し直す
+  "workers_dev": true,
   "assets": {
     "directory": ".open-next/assets",
     "binding": "ASSETS"
