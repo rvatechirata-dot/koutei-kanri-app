@@ -25,7 +25,7 @@ export interface OperationLog {
 
 export type OpAction = "import" | "create" | "edit" | "delete";
 
-export type OpTarget = "csv" | "item" | "case";
+export type OpTarget = "csv" | "item" | "case" | "master";
 
 export const OP_ACTION_LABELS: Record<string, string> = {
   import: "取り込み",
@@ -38,6 +38,7 @@ export const OP_TARGET_LABELS: Record<string, string> = {
   csv: "エムネットのCSV",
   item: "品目",
   case: "案件",
+  master: "基本の一覧",
 };
 
 /** 操作ログを1件残す。失敗しても呼び出し元の処理は止めない。 */
