@@ -6,7 +6,7 @@
  *   - 保存したら、今ある案件（顧客・営業担当）と工程（工程名・機械・担当者／外注先・開始した人・完了した人・不良の理由）の名前もそろえる
  *   - 作業・出荷・実績記録の名前は書き換えない（集計で見るときにそろえる）
  */
-import type { CaseRow, MasterRow, ProcRow } from "./types";
+import type { CaseRow, MasterRow, ProcRow, ProcText } from "./types";
 import { aliasList, masterMap, MASTER_KINDS, NO_NAME, normOne, type MasterMap } from "./rules";
 import { nowJst } from "./time";
 
@@ -20,7 +20,7 @@ export function masterMark(r: Pick<MasterRow, "kind" | "name" | "aliases" | "sor
 }
 
 /** 工程の「担当者・外注先」は、社内の工程なら作業者・外注の工程なら外注先として名寄せする */
-const PROC_FIELDS: [keyof ProcRow, string | null][] = [
+const PROC_FIELDS: [ProcText, string | null][] = [
   ["name", "工程名"],
   ["machine", "機械"],
   ["assignee", null],

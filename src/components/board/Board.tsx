@@ -14,7 +14,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import type { Board, BoardItem, BoardProc } from "@/lib/kotei/board";
 import type { Act } from "@/lib/kotei/acts";
-import { stockRole } from "@/lib/kotei/rules";
+import { isItemDone, stockRole } from "@/lib/kotei/rules";
 import { todayJst } from "@/lib/kotei/time";
 import ScrollWrap from "@/components/ScrollWrap";
 import ProcPanel, { type Send } from "./ProcPanel";
@@ -34,11 +34,12 @@ async function fetchBoard(): Promise<BoardRes> {
 /** 操作の札（同じ操作が2回届いても1回分にするための印） */
 const newOpId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
-function curOf(it: BoardItem): BoardProc | null {
-  return it.procs.find((p) => !p.done_at) ?? null;
-}
+/** 出荷されたら完了（出荷の工程が済めば、ほかの工程が残っていても完了）。完了した品目に「今の工程」は無い */
 function isDone(it: BoardItem): boolean {
-  return it.procs.length > 0 && !curOf(it);
+  return isItemDone(it.kubun, it.procs);
+}
+function curOf(it: BoardItem): BoardProc | null {
+  return isDone(it) ? null : (it.procs.find((p) => !p.done_at) ?? null);
 }
 const dateOnly = (s: string) => s.slice(0, 10);
 
@@ -63,7 +64,12 @@ export default function BoardView() {
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
   // 絞り込みは端末ごとに覚える。データが届くまで画面には出ないので、最初から覚えた値で始める
-  const [f, setFilters] = useState<Filters>(() => (typeof window === "undefined" ? EMPTY : { ...EMPTY, ...loadFilters() }));
+  // ?q=管理番号 で開いたとき（受注一覧から）は、その管理番号で「すべて」から探す
+  const [f, setFilters] = useState<Filters>(() => {
+    if (typeof window === "undefined") return EMPTY;
+    const q = new URLSearchParams(window.location.search).get("q");
+    return q ? { ...EMPTY, q, status: "all" } : { ...EMPTY, ...loadFilters() };
+  });
   const [limit, setLimit] = useState(PAGE);
   const setF = (nf: Filters) => {
     setFilters(nf);

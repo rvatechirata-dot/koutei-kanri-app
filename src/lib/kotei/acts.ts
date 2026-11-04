@@ -14,7 +14,7 @@
  * 3段目：'ship'（分納＝工程は完了にせず出荷だけ記録。何回でも）・'unship'（出荷を取り消す。工程の完了はそのまま）。
  * エムネットの作業ログの取り込みは worklog.ts。
  */
-import type { ProcRow } from "./types";
+import type { ProcRow, ProcText } from "./types";
 import { sortProcs, stockRole } from "./rules";
 import { nowJst } from "./time";
 
@@ -80,7 +80,7 @@ const okAt = (v: string) => /^\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}$/.test(v);
 const round = (n: number) => String(Math.round(n * 1000) / 1000);
 const newId = (prefix: string) => prefix + "w" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
-const PROC_SET_COLS: (keyof ProcRow)[] = ["started_at", "started_by", "done_at", "done_by", "done_qty", "defect_qty", "comment", "defect_reason"];
+const PROC_SET_COLS: ProcText[] = ["started_at", "started_by", "done_at", "done_by", "done_qty", "defect_qty", "comment", "defect_reason"];
 
 export interface ActResult {
   skipped: string[];
@@ -526,7 +526,7 @@ export async function applyActs(db: Db, p: { acts: Act[]; worker: string; accoun
       set.defect_qty = "";
       set.defect_reason = "";
     }
-    (Object.keys(set) as (keyof ProcRow)[]).forEach((k) => {
+    (Object.keys(set) as ProcText[]).forEach((k) => {
       if (r[k] !== set[k]) {
         r[k] = set[k] as string;
         changed.add(pid);

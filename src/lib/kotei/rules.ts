@@ -42,6 +42,20 @@ export function procState(p: Pick<ProcRow, "started_at" | "done_at">): ProcState
   return "todo";
 }
 
+/**
+ * 品目が「完了」か：出荷の工程（名前に「出荷」が無ければ最後の工程）が完了していれば完了（2026-11-04 平田さん「出荷されたら完了にして」）。
+ * 出荷の工程が決まらない品目（区分「在庫管理」など）は、工程が全部終わったら完了。工程が0個なら完了ではない。
+ */
+export function isItemDone(kubun: string, procs: Pick<ProcRow, "id" | "name" | "seq" | "done_at">[]): boolean {
+  if (!procs.length) return false;
+  const role = stockRole(kubun, sortProcs(procs));
+  if (role) {
+    const ship = procs.find((p) => p.id === role.ship);
+    if (ship?.done_at) return true;
+  }
+  return procs.every((p) => p.done_at);
+}
+
 /** 今の工程＝順番どおりで、最初に完了日時が無い工程（後ろが先に終わっていても、前の未完了が今の工程） */
 export function currentProc<T extends Pick<ProcRow, "seq" | "done_at">>(procs: T[]): T | null {
   return sortProcs(procs).find((p) => !p.done_at) ?? null;

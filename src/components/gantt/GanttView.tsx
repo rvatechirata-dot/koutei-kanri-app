@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Board, BoardItem, BoardProc } from "@/lib/kotei/board";
 import { todayJst } from "@/lib/kotei/time";
+import { isItemDone } from "@/lib/kotei/rules";
 
 type Me = { name: string; named: boolean; admin: boolean };
 const DAY_W = 32; // 1日の幅（px）
@@ -63,7 +64,7 @@ export default function GanttView() {
     const k = q.trim().toLowerCase();
     const end = days[days.length - 1];
     return board.items
-      .filter((it) => it.hidden !== "1" && it.case_hidden !== "1" && it.procs.some((p) => !p.done_at))
+      .filter((it) => it.hidden !== "1" && it.case_hidden !== "1" && !isItemDone(it.kubun, it.procs))
       .filter((it) => !k || [it.mgmt_no, it.drawing_no, it.name, it.customer].join(" ").toLowerCase().includes(k))
       .filter((it) => {
         const ds = it.procs.flatMap((p) => [p.plan_start, p.due].filter(Boolean).map((x) => x.slice(0, 10)));

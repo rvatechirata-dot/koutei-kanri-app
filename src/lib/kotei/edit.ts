@@ -214,7 +214,7 @@ export async function saveCase(db: Db, d: SaveInput, who: string, worker: string
       if (!okDate(pr.plan_start) || !okDate(pr.due)) errs.push(`${tag}${name}：日付の形がおかしいです`);
       else if (pr.plan_start && pr.due && pr.plan_start.slice(0, 10) > pr.due.slice(0, 10)) errs.push(`${tag}${name}：開始予定が納期より後になっています`);
       if (!okNum(pr.unit_price) || !okNum(pr.std_time)) errs.push(`${tag}${name}：単価か基準時間が数字ではありません`);
-      if (!op0 || (Object.keys(pr) as (keyof ProcRow)[]).some((c) => pr[c] !== (op0[c] ?? ""))) {
+      if (!op0 || (Object.keys(pr) as (keyof ProcRow)[]).some((c) => (pr[c] ?? "") !== (op0[c] ?? ""))) {
         putP.push(pr);
         pChanged = true;
       }

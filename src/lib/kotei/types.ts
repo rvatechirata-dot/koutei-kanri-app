@@ -64,7 +64,12 @@ export interface ProcRow {
   defect_qty: string;
   comment: string;
   defect_reason: string;
+  /** ボードのレーンの中の並び＝加工順（migration 0002。空＝決めていない） */
+  lane_order?: number | null;
 }
+
+/** 工程の列のうち、文字で持つもの（加工順 lane_order だけは数） */
+export type ProcText = Exclude<keyof ProcRow, "lane_order">;
 
 export interface MasterRow {
   id: string;
@@ -79,7 +84,7 @@ export interface MasterRow {
 /** CSVの1行から作る「案件・品目・工程」（IDなど、CSVに無い列はまだ入っていない） */
 export type CaseFields = Omit<CaseRow, "id" | "updated_at" | "updated_by">;
 export type ItemFields = Omit<ItemRow, "id" | "case_id" | "updated_at" | "updated_by" | "source">;
-export type ProcFields = Omit<ProcRow, "id" | "item_id" | "started_by" | "done_by" | "defect_qty" | "comment" | "defect_reason">;
+export type ProcFields = Omit<ProcRow, "id" | "item_id" | "started_by" | "done_by" | "defect_qty" | "comment" | "defect_reason" | "lane_order">;
 
 export interface CsvRec {
   line: number; // CSVの何行目か

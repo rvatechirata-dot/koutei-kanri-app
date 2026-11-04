@@ -7,7 +7,7 @@
  *   - 比べるのも書くのもサーバー。途中で止まって半分だけ入ることが無い（batch はまとめて入るか、何も入らないか）。
  *   - D1 の書き込みの枠（1日10万行）を食わないよう、変わった品目の行だけ書く。たくさんの行は json_each でまとめて1文にする。
  */
-import type { CaseRow, CsvRec, ItemRow, MasterRow, ProcRow } from "./types";
+import type { CaseRow, CsvRec, ItemRow, MasterRow, ProcRow, ProcText } from "./types";
 import { CASE_LABEL, ITEM_LABEL, PROC_LABEL } from "./types";
 import { masterMap, normOne, OLD_DUE, sortProcs, stockRole, type MasterMap } from "./rules";
 import { nowJst } from "./time";
@@ -16,9 +16,9 @@ type Db = D1Database;
 
 const A_CMP = Object.keys(CASE_LABEL) as (keyof typeof CASE_LABEL)[];
 const I_CMP = Object.keys(ITEM_LABEL) as (keyof typeof ITEM_LABEL)[];
-const P_CMP = Object.keys(PROC_LABEL) as (keyof ProcRow)[];
+const P_CMP = Object.keys(PROC_LABEL) as ProcText[];
 /** CSVが空でも、こちらに入っていれば消さない（現場が入れた実績を守る） */
-const KEEP: (keyof ProcRow)[] = ["started_at", "done_at", "done_qty"];
+const KEEP: ProcText[] = ["started_at", "done_at", "done_qty"];
 
 const short = (s: string) => {
   s = String(s).replace(/\n/g, "⏎");
@@ -147,6 +147,7 @@ function mergeRec(rec: CsvRec, ex: ExItem | undefined): { procs: NewProc[]; ch: 
       p.defect_qty = old.defect_qty || "";
       p.comment = old.comment || "";
       p.defect_reason = old.defect_reason || "";
+      p.lane_order = old.lane_order ?? null; // ボードの加工順もこの画面の中身なので残す
       const diff = P_CMP.filter((h) => (old[h] || "") !== ((p as unknown as Record<string, string>)[h] || ""));
       if (diff.length)
         ch.push(
@@ -339,7 +340,8 @@ function chunks<T>(rows: T[]): T[][] {
 function insertRows(db: Db, table: string, cols: string[], rows: Record<string, unknown>[], verb = "INSERT OR REPLACE"): D1PreparedStatement[] {
   if (!rows.length) return [];
   const sel = cols.map((c) => `json_extract(value, '$.${c}')`).join(", ");
-  return chunks(rows.map((r) => Object.fromEntries(cols.map((c) => [c, r[c] ?? ""])))).map((part) =>
+  // 加工順（lane_order）は数か空（NULL）。それ以外は空なら ""
+  return chunks(rows.map((r) => Object.fromEntries(cols.map((c) => [c, c === "lane_order" ? (r[c] ?? null) : (r[c] ?? "")])))).map((part) =>
     db.prepare(`${verb} INTO ${table} (${cols.join(", ")}) SELECT ${sel} FROM json_each(?)`).bind(JSON.stringify(part))
   );
 }
@@ -354,7 +356,7 @@ const ITEM_COLS = ["id", "case_id", ...I_CMP, "updated_at", "updated_by", "sourc
 const PROC_COLS = [
   "id", "item_id", "seq", "in_out", "mnet_slot", "name", "assignee", "machine", "plan_start", "due", "started_at", "done_at",
   "done_qty", "inspected_on", "inspector", "unit_price", "std_time", "note", "extra_json", "started_by", "done_by",
-  "defect_qty", "comment", "defect_reason",
+  "defect_qty", "comment", "defect_reason", "lane_order",
 ];
 const SHIP_COLS = ["id", "item_id", "process_id", "ship_date", "qty", "note", "recorded_at", "account", "worker"];
 const MV_COLS = ["id", "at", "recorded_at", "account", "worker", "drawing_no", "qty", "kind", "book", "item_id", "process_id", "shipment_id", "detail"];

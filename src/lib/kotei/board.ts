@@ -26,6 +26,8 @@ export interface BoardProc {
   defect_reason: string;
   comment: string;
   note: string;
+  /** ボードのレーンの中の並び＝加工順（空＝決めていない） */
+  lane_order: number | null;
   /** いま作業中の人（取り消していない・終わっていない作業） */
   working: string[];
   /** 取り消していない作業（古い順） */
@@ -93,7 +95,7 @@ export async function loadBoard(db: Db): Promise<Board> {
     ),
     db.prepare(
       `SELECT id, item_id, seq, in_out, name, assignee, machine, plan_start, due, started_at, done_at, done_qty,
-              started_by, done_by, defect_qty, defect_reason, comment, note FROM processes`
+              started_by, done_by, defect_qty, defect_reason, comment, note, lane_order FROM processes`
     ),
     db.prepare(
       `SELECT id, process_id, worker, account, started_at, ended_at, good_qty, defect_qty, comment, machine, defect_reason, source_key, canceled_at
