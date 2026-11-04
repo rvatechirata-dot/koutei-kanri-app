@@ -6,6 +6,8 @@
  *   - 「カード編集：オン」のときだけ、カードを掴んで動かせる（オフの間はうっかり動かない）。指は長押しで掴む
  *   - 別のレーンへ移す／同じレーンの中で並べ替える。カードを押すと小窓が開き、「移動先の工程を選ぶ」でも移せる
  *   - ドラッグ中・小窓を開いている間は、自動の読み直しを止める
+ *   - レーンの左に「納期順に並替」（確認が出る）と、並べ替えた直後だけ「↩ 戻す」（管理者だけ）
+ *   - カードに工程の並び（L1⇒L2⇒MC…）を出し、今の工程だけ目立たせる（加工予定ボードは赤字。ここは強調色の青の太字）
  * 工程管理では、レーン＝今の工程（工程名）。カードを後ろの工程のレーンへ移すと、その手前までの工程を完了にして進める。
  * 前の工程のレーンへ移すと、その工程から今の工程の手前までの完了を取り消す。どちらも確かめてから送る。
  * 同じレーンの中の並べ替えは加工順として残す（管理者だけ）。出荷の工程をまたぐ移動はしない（出荷は小窓で数・伝票を入れる）。
@@ -138,6 +140,8 @@ export default function LaneBoard() {
   // dnd-kit はSSRと初回描画で属性が食い違うため、マウント後にだけ有効化する（加工予定ボードと同じ）
   const [mounted, setMounted] = useState(false);
   const fromLane = useRef<string | null>(null);
+  // 「↩ 戻す」用：レーンごとに、直前の並べ替えの前の順番（この画面を開いている間だけ覚える）
+  const [lastSort, setLastSort] = useState<Record<string, string[]>>({});
 
   const apply = useCallback((b: BoardRes, query: string) => {
     const l = buildLanes(b, query);
@@ -243,6 +247,48 @@ export default function LaneBoard() {
     } else setMsg({ text: `「${lane}」の加工順を保存しました` });
   };
 
+  /** 「納期順に並替」：そのレーンのカードを最終納期の早い順に（納期が無いものは今の順番のまま後ろ）。加工予定ボードと同じ確認を出す */
+  const sortByDue = async (lane: string) => {
+    const cards = [...(laneRef.current.get(lane) ?? [])];
+    if (cards.length < 2) return setMsg({ text: `「${lane}」はカードが${cards.length}枚なので並び替えるものがありません。` });
+    if (
+      !confirm(
+        `「${lane}」のカード ${cards.length} 枚を、最終納期の早い順に並び替えます。\n\n・納期が空のカードは、今の順番のまま後ろに置きます\n・間違えて押したときは、同じ場所に出る「↩ 戻す」ボタンで並び替え前に戻せます\n\n並び替えてよろしいですか？`
+      )
+    )
+      return;
+    const before = cards.map((c) => c.cur.id);
+    const sorted = cards
+      .map((c, i) => ({ c, i }))
+      .sort((a, b) => {
+        const x = a.c.it.final_due || "";
+        const y = b.c.it.final_due || "";
+        if (!x || !y) return (x ? 0 : 1) - (y ? 0 : 1) || a.i - b.i;
+        return x.localeCompare(y) || a.i - b.i;
+      })
+      .map((x) => x.c);
+    const next = new Map(laneRef.current);
+    next.set(lane, sorted);
+    setLanes(next);
+    setLastSort({ ...lastSort, [lane]: before });
+    await saveOrder(lane, sorted);
+  };
+  /** 「↩ 戻す」：直前の並べ替えの前の順番に戻す（そのあと動いたカードは今の場所のまま、残りを元の順に） */
+  const undoSort = async (lane: string) => {
+    const before = lastSort[lane];
+    if (!before || !confirm(`「${lane}」の並び替えを取り消して、前の順番に戻します。よろしいですか？`)) return;
+    const cards = [...(laneRef.current.get(lane) ?? [])];
+    const pos = new Map(before.map((id, i) => [id, i]));
+    const back = cards.slice().sort((a, b) => (pos.get(a.cur.id) ?? 1e9) - (pos.get(b.cur.id) ?? 1e9));
+    const next = new Map(laneRef.current);
+    next.set(lane, back);
+    setLanes(next);
+    const rest = { ...lastSort };
+    delete rest[lane];
+    setLastSort(rest);
+    await saveOrder(lane, back);
+  };
+
   function onStart(e: DragStartEvent) {
     const lane = findLane(String(e.active.id));
     fromLane.current = lane;
@@ -292,6 +338,7 @@ export default function LaneBoard() {
     if (fi < 0) return;
     if (ti < 0) ti = cards.length - 1;
     if (fi === ti) return;
+    setLastSort({ ...lastSort, [to]: cards.map((c) => c.cur.id) });
     const [m] = cards.splice(fi, 1);
     cards.splice(ti, 0, m);
     const next = new Map(laneRef.current);
@@ -333,14 +380,20 @@ export default function LaneBoard() {
           type="button"
           onClick={() => setEditMode(!editMode)}
           aria-pressed={editMode}
+          title={editMode ? "カードを動かせないように戻します" : "カードをドラッグで動かせるようにします"}
           className={`${BTN} ${editMode ? "bg-accent text-white" : "border border-accent bg-white text-accent"}`}
         >
-          {editMode ? "カード編集：オン（掴んで動かせる）" : "カード編集：オフ"}
+          {editMode ? "✏️ カード編集：オン" : "🔒 カード編集：オフ"}
         </button>
-        <label className="flex min-h-11 items-center gap-2 text-base">
-          <input type="checkbox" checked={compact} onChange={(e) => setCompact(e.target.checked)} className="h-5 w-5" />
-          カードを小さく
-        </label>
+        <button
+          type="button"
+          onClick={() => setCompact(!compact)}
+          aria-pressed={compact}
+          title="カードを小さくして、管理番号・図面番号・数量・納期・工程の並びだけを表示します"
+          className={`${BTN} ${compact ? "bg-accent text-white" : "border border-accent bg-white text-accent"}`}
+        >
+          {compact ? "▪ カードを小さく：オン" : "▫ カードを小さく"}
+        </button>
         <label className="flex flex-col gap-2 text-sm">
           さがす（管理番号・図面番号・品名・顧客）
           <input
@@ -371,6 +424,11 @@ export default function LaneBoard() {
               compact={compact}
               today={today}
               onOpen={(c) => setOpen(c)}
+              admin={me.admin}
+              busy={busy}
+              canUndo={!!lastSort[name]}
+              onSort={() => sortByDue(name)}
+              onUndo={() => undoSort(name)}
             />
           ))}
         </div>
@@ -432,6 +490,11 @@ function Lane({
   compact,
   today,
   onOpen,
+  admin,
+  busy,
+  canUndo,
+  onSort,
+  onUndo,
 }: {
   name: string;
   cards: Card[];
@@ -439,6 +502,11 @@ function Lane({
   compact: boolean;
   today: string;
   onOpen: (c: Card) => void;
+  admin: boolean;
+  busy: boolean;
+  canUndo: boolean;
+  onSort: () => void;
+  onUndo: () => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `lane:${name}` });
   return (
@@ -446,6 +514,28 @@ function Lane({
       <div className="flex w-36 shrink-0 flex-col justify-center border-r border-line bg-card px-2 py-2">
         <p className="text-base font-bold">{name}</p>
         <p className="text-sm text-ink-sub">{cards.length}件</p>
+        {admin && cards.length > 1 && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onSort}
+            title={`「${name}」のカードを最終納期の早い順に並び替えます（確認が出ます）`}
+            className="mt-2 min-h-11 rounded-lg border border-accent bg-white px-2 text-sm font-bold text-accent disabled:opacity-50"
+          >
+            納期順に並替
+          </button>
+        )}
+        {admin && canUndo && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onUndo}
+            title="直前の並び替えを取り消して、前の順番に戻します（確認が出ます）"
+            className="mt-2 min-h-11 rounded-lg border border-ink bg-warn-bg px-2 text-sm font-bold text-ink disabled:opacity-50"
+          >
+            ↩ 戻す
+          </button>
+        )}
       </div>
       <div ref={setNodeRef} className="min-w-0 flex-1 overflow-x-auto">
         <SortableContext items={cards.map((c) => c.cur.id)} strategy={horizontalListSortingStrategy}>
@@ -481,8 +571,6 @@ function CardView({ card, compact, today, onOpen, overlay }: { card: Card; compa
   const late = !!it.final_due && it.final_due.slice(0, 10) < today;
   const doing = !!cur.started_at;
   const sub = cur.machine || (cur.assignee && cur.assignee !== "-" ? cur.assignee : "");
-  const idx = it.procs.findIndex((p) => p.id === cur.id);
-  const next = it.procs.slice(idx + 1).find((p) => !p.done_at);
   return (
     <button
       type="button"
@@ -507,6 +595,14 @@ function CardView({ card, compact, today, onOpen, overlay }: { card: Card; compa
           </span>
         )}
       </span>
+      <span className="text-sm leading-tight break-all">
+        {it.procs.map((p, n) => (
+          <span key={p.id}>
+            {n > 0 && <span className="text-ink-sub">⇒</span>}
+            <span className={p.id === cur.id ? "font-bold text-accent underline" : p.done_at ? "text-ink-sub" : ""}>{p.name}</span>
+          </span>
+        ))}
+      </span>
       {!compact && (
         <>
           {(sub || cur.in_out === "外注") && (
@@ -516,7 +612,6 @@ function CardView({ card, compact, today, onOpen, overlay }: { card: Card; compa
             </span>
           )}
           {cur.working.length > 0 && <span className="text-sm font-bold">作業中{cur.working.length}人</span>}
-          {next && <span className="text-sm text-ink-sub">次：{next.name}</span>}
         </>
       )}
     </button>
