@@ -1,6 +1,6 @@
 # 工程管理（koutei-kanri-app）
 
-受注（エムネットの案件）が、いまどの工程にいるかを一目で見る。川﨑課長の試作（Apps Script 版）を作り直したもの。
+受注（エムネットの案件）が、いまどの工程にいるかを一目で見る。川﨑部長の試作（Apps Script 版）を作り直したもの。
 仕様は `docs/仕様書.md`。
 
 - 本番URL: まだ公開していない（公開したら https://koutei-kanri-app.rvatec-hirata.workers.dev 。Cloudflare Access で社員のみ）

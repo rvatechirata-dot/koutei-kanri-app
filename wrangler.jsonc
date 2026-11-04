@@ -1,12 +1,15 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "koutei-kanri-app",
+  // 出す先をリバテックの Cloudflare アカウントに固定する（手伝いの人が複数のアカウントに入れても、カワ側へ出ないように）
+  "account_id": "825b853d28d323f52394bbf74819781e",
   "main": ".open-next/worker.js",
   "compatibility_date": "2026-06-01",
   "compatibility_flags": ["nodejs_compat"],
   // 重要: Access認証をバイパスされないよう preview URL は必ず無効化（社内ルール）
   "preview_urls": false,
-  "workers_dev": true,
+  // ⚠ 最初の公開は false（Cloudflare Access に登録するまで外から開けないように）。登録して社外から302を確かめてから true にする
+  "workers_dev": false,
   "assets": {
     "directory": ".open-next/assets",
     "binding": "ASSETS"
@@ -31,9 +34,8 @@
     {
       "binding": "DB",
       "database_name": "koutei-kanri-db",
-      // ⚠ 本番のデータベースはまだ作っていない（2026-11-03 時点は手元の開発用だけ）。
-      //   最初に公開するとき `npx wrangler d1 create koutei-kanri-db` で作り、出てきた id をここに入れる
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      // 2026-11-04 作成（APAC）
+      "database_id": "91133631-a735-471d-bc88-5b4e4f230f77",
       "migrations_dir": "migrations"
     },
     {

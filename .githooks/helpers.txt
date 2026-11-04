@@ -1,5 +1,8 @@
-# 手伝いの人の git のメールアドレス。1行に1つ。
+# 手伝いの人の git のメールアドレス。1行に1つ（2026-11-04〜 川﨑部長）。
 # ここにある人は、プルリクエストなしで main に直接 push でき、リバ側へデプロイ（npm run deploy）もできる。
 #   push は scripts/check-push.cjs、デプロイは scripts/deploy-rvatec.cjs がこの名簿を見る。
-# 2026-11-03 作成時点では誰もいない（川﨑課長を入れるかは平田さんが決める）。
+# Cloudflare（リバ）は Workers Platform Admin なので、koutei-kanri-db の migration も流してよい。
+#   順番は「koutei-kanri-db に流す → デプロイ」。流していないとデプロイは止まる（scripts/check-migrations.cjs）。
+# 変更は毎朝8時のレポートで平田が見る（01_アプリ\カワ側アプリ変更レポート）。
 # 持ち主ではないので owners.txt には足さない（関所の ⚠ 表示を残すため）。
+kawasaki-yu@rvatec.com

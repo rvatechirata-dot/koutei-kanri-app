@@ -9,7 +9,7 @@ const { execSync } = require("node:child_process");
 const { deployNote, me } = require("./deploy-note.cjs");
 const { checkMigrations } = require("./check-migrations.cjs");
 
-// koutei-kanri-app はリバ側だけのアプリ。手伝いの人（.githooks/helpers.txt）を足すときは平田さんに確認してから。
+// koutei-kanri-app はリバ側だけのアプリなので、手伝いの人（.githooks/helpers.txt の川﨑部長・2026-11-04〜）も出せる。
 //   出した内容は毎朝8時のレポートで平田が見る。
 const readList = (name) =>
   fs

@@ -3,7 +3,7 @@
  *
  * 流れ：画面がCSVを読んで行（CsvRec）にする → previewImport で今のデータと比べて「新しい・変わる・変わらない・CSVにない」を返す
  *       → 人が確かめて「取り込む」→ commitImport でもう一度比べ直して、1回のまとまり（D1 の batch）で書く。
- * 比べ方は川﨑課長の試作（index.html の normRec・mergeRec・importStock・analyze・runImport）と同じ。試作と違うのは次の2点：
+ * 比べ方は川﨑部長の試作（index.html の normRec・mergeRec・importStock・analyze・runImport）と同じ。試作と違うのは次の2点：
  *   - 比べるのも書くのもサーバー。途中で止まって半分だけ入ることが無い（batch はまとめて入るか、何も入らないか）。
  *   - D1 の書き込みの枠（1日10万行）を食わないよう、変わった品目の行だけ書く。たくさんの行は json_each でまとめて1文にする。
  */
