@@ -43,7 +43,7 @@ export async function POST(req: Request) {
         const o = (x ?? {}) as Record<string, unknown>;
         return { date: str(o.date, 10), memo: str(o.memo, 100) };
       });
-      await saveHolidays(db, { put, del: arr(b.del).map((x) => str(x, 10)) }, user.email, user.name);
+      await saveHolidays(db, { put, del: arr(b.del).map((x) => str(x, 10)), note: str(b.note, 200) }, user.email, user.name);
       return Response.json({ ok: true });
     }
     return Response.json({ error: "知らない操作です" }, { status: 400 });

@@ -207,7 +207,7 @@ export async function saveMasters(
 }
 
 /** 休日を1日ずつ足す・外す（土日は書かなくても休み） */
-export async function saveHolidays(db: Db, d: { put: { date: string; memo: string }[]; del: string[] }, who: string, worker: string): Promise<void> {
+export async function saveHolidays(db: Db, d: { put: { date: string; memo: string }[]; del: string[]; note?: string }, who: string, worker: string): Promise<void> {
   const now = nowJst();
   const bad = d.put.filter((x) => !/^\d{4}\/\d{2}\/\d{2}$/.test(x.date));
   if (bad.length) throw new MasterError(`日付の形がおかしいです（${bad.map((x) => x.date).join("・")}）。2026/12/29 の形で入れてください`);
@@ -215,7 +215,7 @@ export async function saveHolidays(db: Db, d: { put: { date: string; memo: strin
   const stmts: D1PreparedStatement[] = [];
   d.put.forEach((x) => stmts.push(db.prepare("INSERT OR REPLACE INTO holidays (date, memo) VALUES (?, ?)").bind(x.date, x.memo.trim())));
   d.del.forEach((x) => stmts.push(db.prepare("DELETE FROM holidays WHERE date = ?").bind(x)));
-  const detail = [d.put.length ? "足す " + d.put.map((x) => x.date).join("・") : "", d.del.length ? "外す " + d.del.join("・") : ""].filter(Boolean).join(" ／ ");
+  const detail = [d.note || "", d.put.length ? "足す " + d.put.map((x) => x.date).join("・") : "", d.del.length ? "外す " + d.del.join("・") : ""].filter(Boolean).join(" ／ ");
   stmts.push(
     db.prepare("INSERT INTO action_log (at, recorded_at, account, worker, action, op_id, detail) VALUES (?, ?, ?, ?, '休日の一覧', ?, ?)").bind(now, now, who, worker, "h" + Date.now().toString(36), detail),
     db.prepare("UPDATE settings SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT) WHERE key = 'ver'")

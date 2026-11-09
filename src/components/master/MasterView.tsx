@@ -471,6 +471,36 @@ function EditRow({
   );
 }
 
+/** 休日のファイルの文字：UTF-8 で読み、文字化けの印（�）があれば Shift_JIS で読み直す（試作と同じ） */
+async function decodeText(buf: ArrayBuffer): Promise<string> {
+  const t = new TextDecoder("utf-8").decode(buf);
+  return t.includes("�") ? new TextDecoder("shift_jis").decode(buf) : t;
+}
+
+/** リバテック休日.txt を読む：1行に1日。「2026/4/29 # メモ」。区切りは / - .。同じ日は最初の1行だけ（試作の parseHolidays と同じ） */
+function parseHolidayText(text: string): { date: string; memo: string }[] {
+  const seen = new Set<string>();
+  const out: { date: string; memo: string }[] = [];
+  text
+    .replace(/^﻿/, "")
+    .split(/\r?\n/)
+    .forEach((line) => {
+      // 日付は全角の数字も読む（NFKC）。メモは書いたまま
+      const body = line.replace(/#.*$/, "").normalize("NFKC").trim();
+      const memo = (line.match(/#\s*(.*)$/)?.[1] ?? "").trim().slice(0, 100);
+      const m = body.match(/^(\d{4})[/\-.](\d{1,2})[/\-.](\d{1,2})$/);
+      if (!m) return;
+      const mo = Number(m[2]);
+      const d = Number(m[3]);
+      if (mo < 1 || mo > 12 || d < 1 || d > 31) return;
+      const k = `${m[1]}/${m[2].padStart(2, "0")}/${m[3].padStart(2, "0")}`;
+      if (seen.has(k)) return;
+      seen.add(k);
+      out.push({ date: k, memo });
+    });
+  return out.sort((a, b) => a.date.localeCompare(b.date));
+}
+
 function Holidays({
   list,
   busy,
@@ -486,9 +516,111 @@ function Holidays({
     const m = s.normalize("NFKC").trim().match(/^(\d{4})[/\-.](\d{1,2})[/\-.](\d{1,2})$/);
     return m ? `${m[1]}/${m[2].padStart(2, "0")}/${m[3].padStart(2, "0")}` : s.trim();
   };
+  /** ファイルで丸ごと入れ替える前の「足す・外す・メモが変わる」 */
+  const [plan, setPlan] = useState<{
+    file: string;
+    rows: { date: string; memo: string }[];
+    add: { date: string; memo: string }[];
+    memo: { date: string; memo: string; old: string }[];
+    del: { date: string; memo: string }[];
+  } | null>(null);
+  const [fileErr, setFileErr] = useState("");
+
+  const readFile = async (f: File | undefined) => {
+    setFileErr("");
+    setPlan(null);
+    if (!f) return;
+    const rows = parseHolidayText(await decodeText(await f.arrayBuffer()));
+    if (!rows.length) return setFileErr("日付の行が見つかりませんでした（1行に1日、「2026/4/29 # メモ」の形で書きます）。");
+    const now = new Map(list.map((h) => [h.date, h.memo]));
+    const inFile = new Set(rows.map((r) => r.date));
+    setPlan({
+      file: f.name,
+      rows,
+      add: rows.filter((r) => !now.has(r.date)),
+      memo: rows.filter((r) => now.has(r.date) && now.get(r.date) !== r.memo).map((r) => ({ ...r, old: now.get(r.date) || "" })),
+      del: list.filter((h) => !inFile.has(h.date)),
+    });
+  };
+
   return (
     <section className="mt-4">
       <p className="text-base">土日のほかの休みを入れます（土日は入れなくても休み）。ガントで日付を灰色にするのに使います。</p>
+      <div className="mt-4 rounded-lg bg-card p-4">
+        <p className="text-base font-bold">ファイルで丸ごと入れ替える（リバテック休日.txt）</p>
+        <p className="mt-1 text-sm">
+          1行に1日（「2026/4/29 # メモ」の形。区切りは / - . どれでも）。ファイルに無い休日は外れます。入れ替える前に、足す日・外す日を出します。
+        </p>
+        <label className={`${SUB} mt-2 inline-flex cursor-pointer items-center`}>
+          ファイルを選ぶ
+          <input
+            type="file"
+            accept=".txt,text/plain"
+            className="sr-only"
+            onChange={(e) => {
+              readFile(e.target.files?.[0]);
+              e.target.value = "";
+            }}
+          />
+        </label>
+        {fileErr && (
+          <p role="alert" className="mt-2 text-base text-danger">
+            {fileErr}
+          </p>
+        )}
+        {plan && (
+          <div className="mt-2 rounded border-2 border-accent bg-white p-4">
+            <p className="text-base">
+              <b>{plan.file}</b>：{plan.rows.length}日（{plan.rows[0].date}〜{plan.rows[plan.rows.length - 1].date}）
+            </p>
+            <p className="mt-1 text-base">
+              足す <b>{plan.add.length}日</b>・外す <b>{plan.del.length}日</b>・メモが変わる <b>{plan.memo.length}日</b>
+            </p>
+            {[
+              ["足す", plan.add.map((h) => `${h.date} ${h.memo}`)],
+              ["外す（ファイルに無い）", plan.del.map((h) => `${h.date} ${h.memo}`)],
+              ["メモが変わる", plan.memo.map((h) => `${h.date} ${h.old || "（空）"} → ${h.memo || "（空）"}`)],
+            ].map(([label, lines]) =>
+              (lines as string[]).length ? (
+                <details key={label as string} className="mt-2" open={(lines as string[]).length <= 10}>
+                  <summary className="cursor-pointer text-base font-bold">{label as string}</summary>
+                  <ul className="mt-1 text-base">
+                    {(lines as string[]).map((t) => (
+                      <li key={t}>・{t}</li>
+                    ))}
+                  </ul>
+                </details>
+              ) : null
+            )}
+            {plan.add.length + plan.del.length + plan.memo.length === 0 ? (
+              <p className="mt-2 text-base">今の休日の一覧と同じです。変えるものはありません。</p>
+            ) : (
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={async () => {
+                    if (!confirm(`休日の一覧を「${plan.file}」の ${plan.rows.length}日に入れ替えます（足す ${plan.add.length}日・外す ${plan.del.length}日）。よろしいですか？`)) return;
+                    if (
+                      await post(
+                        { kind: "hol", put: [...plan.add, ...plan.memo.map((h) => ({ date: h.date, memo: h.memo }))], del: plan.del.map((h) => h.date), note: `ファイル（${plan.file}）で入れ替え` },
+                        () => `休日を入れ替えました（足す ${plan.add.length}日・外す ${plan.del.length}日・メモ ${plan.memo.length}日）`
+                      )
+                    )
+                      setPlan(null);
+                  }}
+                  className={MAIN}
+                >
+                  入れ替える
+                </button>
+                <button type="button" onClick={() => setPlan(null)} className={SUB}>
+                  やめる
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
       <div className="mt-2 flex flex-wrap items-end gap-4">
         <label className="flex flex-col gap-2 text-sm">
           日付
