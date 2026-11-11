@@ -3,8 +3,11 @@
 /**
  * ガント（4段目）。横棒＝工程の「開始予定〜納期」。色と字で まだ／中（作業中）／済（完了）／遅れ（納期すぎで終わっていない）。
  * 土日・休日は灰色、今日は青い縦線。棒を押すと（管理者だけ）開始予定・納期を直せる。
- * 「後ろの工程もずらす」にすると、納期を動かした日数だけ後ろの工程も同じだけずらす（「休日を数えない」なら稼働日で数える）。
- * 試作は棒を引っぱって動かしたが、ここでは押して日付を直す（指で誤って動かさないため）。
+ * 上の帯の「後ろの工程もずらす」（初めはオン・試作と同じ）：小窓・引っぱる・まとめてずらす のどれで動かしても、
+ *   納期を動かした日数だけ、同じ品目の後ろの工程（まだ終わっていないもの。出荷も入る）も同じだけずらす。
+ *   「休日を数えない」（初めはオン）なら稼働日の数に直してずらす。2本以上選んでいても、同じ工程は1回だけ動かす。
+ *   2つの印はそのパソコンに覚えておく。
+ * 動かしたら、保存を待たずに行き先の位置で見せる（2026-11-11。保存に失敗したら元に戻して知らせる）。
  * 複数選ぶ（試作と同じ）：Ctrl か Shift を押しながら棒を押す／「複数選ぶ」を入れて押す と、選ぶ・外すになる。
  *   選んだ棒は上の帯の「−1日」「＋1日」「○日ずらす」で、全部同じだけ動かす（開始予定と納期の両方）。Esc か「選ぶのをやめる」で外す。
  *   動かす前に確かめる。
@@ -54,6 +57,64 @@ function shiftDate(d: string, n: number, work: boolean, isOff: (d: string) => bo
   return x + time;
 }
 
+/** a から b まで何日動いたか（work なら土日・休日を数えない稼働日の数） */
+function daysBetween(a: string, b: string, work: boolean, isOff: (d: string) => boolean): number {
+  if (!a || !b || a === b) return 0;
+  if (!work) return diffDays(a, b);
+  const step = b > a ? 1 : -1;
+  let n = 0;
+  let x = a;
+  while (x !== b) {
+    x = addDays(x, step);
+    if (!isOff(x)) n += step;
+  }
+  return n;
+}
+
+type Hit = { it: BoardItem; p: BoardProc };
+/** 同じ品目で、この工程より後ろの、まだ終わっていない予定の入った工程（出荷も入る。試作の gLater と同じ） */
+const laterProcs = (it: BoardItem, p: BoardProc) => {
+  const i = it.procs.findIndex((x) => x.id === p.id);
+  return it.procs.slice(i + 1).filter((x) => !x.done_at && (x.plan_start || x.due));
+};
+
+/**
+ * 動かした棒の新しい予定から、送る中身を作る（試作の gPlanMany と同じ）。
+ * 動かした棒はそのとおりに。cascade なら、後ろの工程は「納期の動き（納期が無ければ開始予定の動き）」だけずらす
+ * （work なら稼働日の数に直してずらす）。同じ工程は1回だけ（選んだ棒・前の棒の後ろで重なっても二重に動かさない）。
+ */
+function planMany(list: (Hit & { ns: string; ne: string })[], cascade: boolean, work: boolean, isOff: (d: string) => boolean): { changes: Change[]; later: number } {
+  const map = new Map<string, Change>();
+  const put = (q: BoardProc, s: string, e: string) => {
+    if (!map.has(q.id)) map.set(q.id, { pid: q.id, s, e, base: { s: q.plan_start, e: q.due } });
+  };
+  list.forEach((x) => put(x.p, x.ns, x.ne));
+  if (cascade) {
+    [...list]
+      .sort((x, y) => x.it.procs.findIndex((q) => q.id === x.p.id) - y.it.procs.findIndex((q) => q.id === y.p.id))
+      .forEach((x) => {
+        const o = (x.p.due || x.p.plan_start).slice(0, 10);
+        const m = (x.p.due ? x.ne : x.ns).slice(0, 10);
+        const k = daysBetween(o, m, work, isOff);
+        if (!o || !m || !k) return;
+        laterProcs(x.it, x.p).forEach((q) => put(q, shiftDate(q.plan_start, k, work, isOff), shiftDate(q.due, k, work, isOff)));
+      });
+  }
+  const changes = [...map.values()].filter((c) => c.s !== c.base.s || c.e !== c.base.e);
+  return { changes, later: changes.filter((c) => !list.some((x) => x.p.id === c.pid)).length };
+}
+
+/** 上の帯の「後ろの工程もずらす」「休日を数えない」を、そのパソコンに覚えておく */
+const PREF_KEY = "kotei-gantt-pref";
+const readPref = (): { cascade: boolean; work: boolean } => {
+  try {
+    const v = JSON.parse(localStorage.getItem(PREF_KEY) || "{}");
+    return { cascade: v.cascade !== false, work: v.work !== false };
+  } catch {
+    return { cascade: true, work: true };
+  }
+};
+
 /** 「3」「−2」「－２」などを整数にする（数でなければ 0） */
 const toInt = (v: string) => {
   const n = Number(v.normalize("NFKC").replace(/[−－ー]/g, "-").trim());
@@ -75,7 +136,25 @@ export default function GanttView() {
   /** 「複数選ぶ」を入れているか（タブレット用。入れると棒を押すたびに選ぶ・外す） */
   const [selMode, setSelMode] = useState(false);
   const [shiftN, setShiftN] = useState("1");
-  const [shiftWork, setShiftWork] = useState(true);
+  /** 後ろの工程もずらす（初めはオン・試作と同じ）／休日を数えない（稼働日でずらす） */
+  // 最初の表示は「読み込み中…」だけなので、サーバーで作る画面と食い違わない
+  const [cascade, setCascadeRaw] = useState(() => readPref().cascade);
+  const [work, setWorkRaw] = useState(() => readPref().work);
+  const savePref = (v: { cascade: boolean; work: boolean }) => {
+    try {
+      localStorage.setItem(PREF_KEY, JSON.stringify(v));
+    } catch {
+      /* 覚えられなくても動く */
+    }
+  };
+  const setCascade = (v: boolean) => {
+    setCascadeRaw(v);
+    savePref({ cascade: v, work });
+  };
+  const setWork = (v: boolean) => {
+    setWorkRaw(v);
+    savePref({ cascade, work: v });
+  };
   /** 元に戻す（1回）：直前の変更を戻すための中身 */
   const [undo, setUndo] = useState<{ label: string; changes: Change[] } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -109,16 +188,35 @@ export default function GanttView() {
     return () => window.removeEventListener("keydown", onKey);
   }, [edit]);
 
-  /** 予定の変更を送る。うまくいけば「元に戻す」に、変える前の予定を覚える（元に戻したときは消す） */
+  /**
+   * 予定の変更を送る。うまくいけば「元に戻す」に、変える前の予定を覚える（元に戻したときは消す）。
+   * 送る前に、画面のデータを行き先の日付に書き換えて見せておく（保存を待つ間に棒が元の位置へ戻って見えないように）。
+   * 保存に失敗したら、画面を元の予定に戻して知らせる。
+   */
   const sendPlan = useCallback(
     async (changes: Change[], label: string, isUndo = false): Promise<boolean> => {
+      if (!changes.length) return false;
       setBusy(true);
+      const before = board; // 保存に失敗したとき元に戻すため
+      if (before) {
+        const m = new Map(changes.map((c) => [c.pid, c]));
+        setBoard({
+          ...before,
+          items: before.items.map((it) =>
+            it.procs.some((p) => m.has(p.id)) ? { ...it, procs: it.procs.map((p) => (m.has(p.id) ? { ...p, plan_start: m.get(p.id)!.s, due: m.get(p.id)!.e } : p)) } : it
+          ),
+        });
+      }
+      const putBack = () => {
+        if (before) setBoard(before);
+      };
       try {
         const r = await fetch("/api/plan", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ changes }) });
         const j = (await r.json().catch(() => ({}))) as { error?: string; changed?: number };
         if (!r.ok) {
+          putBack();
           if (isUndo) setUndo(null);
-          setMsg({ text: (j.error || `保存できませんでした（${r.status}）`) + "（何も保存されていません）", bad: true });
+          setMsg({ text: (j.error || `保存できませんでした（${r.status}）`) + "（何も保存されていません。元の予定に戻しました）", bad: true });
           await load();
           return false;
         }
@@ -127,13 +225,14 @@ export default function GanttView() {
         await load();
         return true;
       } catch {
-        setMsg({ text: "つながりませんでした。何も保存されていません。", bad: true });
+        putBack();
+        setMsg({ text: "つながりませんでした。何も保存されていません。元の予定に戻しました。", bad: true });
         return false;
       } finally {
         setBusy(false);
       }
     },
-    [load]
+    [load, board]
   );
 
   const days = useMemo(() => Array.from({ length: span }, (_, i) => addDays(start, i)), [start, span]);
@@ -162,20 +261,21 @@ export default function GanttView() {
   /** 選んだ棒を全部 n 日ずらす（開始予定と納期の両方） */
   const shiftSelected = async (n: number) => {
     if (!n || !sel.size) return;
-    const list = [...sel].map((id) => byPid.get(id)).filter((x): x is { it: BoardItem; p: BoardProc } => !!x);
-    const changes: Change[] = list.map(({ p }) => ({
-      pid: p.id,
-      s: shiftDate(p.plan_start, n, shiftWork, isOff),
-      e: shiftDate(p.due, n, shiftWork, isOff),
-      base: { s: p.plan_start, e: p.due },
-    }));
+    const list = [...sel].map((id) => byPid.get(id)).filter((x): x is Hit => !!x);
+    const { changes, later } = planMany(
+      list.map((x) => ({ ...x, ns: shiftDate(x.p.plan_start, n, work, isOff), ne: shiftDate(x.p.due, n, work, isOff) })),
+      cascade,
+      work,
+      isOff
+    );
     const head = list
       .slice(0, 5)
       .map(({ it, p }) => `・${it.mgmt_no} ${p.name}`)
       .join("\n");
-    const days = `${n > 0 ? "+" : ""}${n}日${shiftWork ? "（稼働日）" : ""}`;
-    if (!confirm(`選んだ ${list.length}本 の開始予定と納期を ${days} ずらします。\n${head}${list.length > 5 ? `\nほか ${list.length - 5}本` : ""}\nよろしいですか？`)) return;
-    await sendPlan(changes, `予定の変更 ${list.length}本まとめて（${days}）`);
+    const days = `${n > 0 ? "+" : ""}${n}日${work ? "（稼働日）" : ""}`;
+    const tail = later ? `\n後ろの工程 ${later}個 も同じだけずらします。` : "";
+    if (!confirm(`選んだ ${list.length}本 の開始予定と納期を ${days} ずらします。\n${head}${list.length > 5 ? `\nほか ${list.length - 5}本` : ""}${tail}\nよろしいですか？`)) return;
+    await sendPlan(changes, `予定の変更 ${list.length}本まとめて${later ? `と後ろ${later}個` : ""}（${days}）`);
   };
 
   /** 放したら保存する（カレンダーの日数で動かす） */
@@ -185,17 +285,18 @@ export default function GanttView() {
       dragged.current = true;
       setTimeout(() => (dragged.current = false), 0);
       if (!d.k) return;
-      const list = d.ids.map((id) => byPid.get(id)).filter((x): x is { it: BoardItem; p: BoardProc } => !!x);
-      const changes: Change[] = list.map(({ p }) => ({
-        pid: p.id,
-        s: d.mode === "move" ? shiftDate(p.plan_start, d.k, false, isOff) : p.plan_start,
-        e: shiftDate(p.due, d.k, false, isOff),
-        base: { s: p.plan_start, e: p.due },
-      }));
+      const list = d.ids.map((id) => byPid.get(id)).filter((x): x is Hit => !!x);
+      // 引っぱった棒はカレンダーの日数で動かす。後ろの工程は、納期の動きを（休日を数えないなら稼働日に直して）ずらす
+      const { changes, later } = planMany(
+        list.map((x) => ({ ...x, ns: d.mode === "move" ? shiftDate(x.p.plan_start, d.k, false, isOff) : x.p.plan_start, ne: shiftDate(x.p.due, d.k, false, isOff) })),
+        cascade,
+        work,
+        isOff
+      );
       const one = list.length === 1 ? `${list[0].it.mgmt_no} ${list[0].p.name}` : `${list.length}本まとめて`;
-      await sendPlan(changes, `予定の変更 ${one}（引っぱって${d.mode === "end" ? "納期を" : ""}${d.k > 0 ? "+" : ""}${d.k}日）`);
+      await sendPlan(changes, `予定の変更 ${one}${later ? `と後ろ${later}個` : ""}（引っぱって${d.mode === "end" ? "納期を" : ""}${d.k > 0 ? "+" : ""}${d.k}日）`);
     },
-    [byPid, isOff, sendPlan]
+    [byPid, isOff, sendPlan, cascade, work]
   );
 
   /** マウスで棒をつかむ（指・ペンでは何もしない＝押して小窓のまま） */
@@ -335,6 +436,14 @@ export default function GanttView() {
           <button type="button" disabled={!undo || busy} onClick={doUndo} title={undo ? undo.label : ""} className={`${SUB} disabled:opacity-50`}>
             ↶ 元に戻す
           </button>
+          <label className="flex min-h-11 items-center gap-2 text-base">
+            <input type="checkbox" checked={cascade} onChange={(e) => setCascade(e.target.checked)} className="h-5 w-5" />
+            後ろの工程もずらす
+          </label>
+          <label className="flex min-h-11 items-center gap-2 text-base">
+            <input type="checkbox" checked={work} onChange={(e) => setWork(e.target.checked)} className="h-5 w-5" />
+            休日を数えない（稼働日でずらす）
+          </label>
           {undo && <span className="text-sm text-ink-sub">戻せるのは直前の1回：{undo.label}</span>}
           {selMode && <span className="text-base">押した棒を選ぶ・外す（日付の小窓は開きません）</span>}
         </div>
@@ -370,10 +479,10 @@ export default function GanttView() {
           >
             ずらす
           </button>
-          <label className="flex min-h-11 items-center gap-2 text-base">
-            <input type="checkbox" checked={shiftWork} onChange={(ev) => setShiftWork(ev.target.checked)} className="h-5 w-5" />
-            休日を数えない
-          </label>
+          <span className="text-sm text-ink-sub">
+            {work ? "休日を数えない" : "カレンダーの日数"}
+            {cascade ? "・後ろの工程もずらす" : ""}
+          </span>
           <button type="button" onClick={() => setSel(new Set())} className={SUB}>
             選ぶのをやめる（Esc）
           </button>
@@ -446,6 +555,10 @@ export default function GanttView() {
           it={edit.it}
           p={edit.p}
           isOff={isOff}
+          cascade={cascade}
+          work={work}
+          setCascade={setCascade}
+          setWork={setWork}
           onClose={() => setEdit(null)}
           busy={busy}
           onSave={async (changes, label) => {
@@ -554,6 +667,10 @@ function EditBox({
   it,
   p,
   isOff,
+  cascade,
+  work,
+  setCascade,
+  setWork,
   onClose,
   busy,
   onSave,
@@ -561,43 +678,28 @@ function EditBox({
   it: BoardItem;
   p: BoardProc;
   isOff: (d: string) => boolean;
+  cascade: boolean;
+  work: boolean;
+  setCascade: (v: boolean) => void;
+  setWork: (v: boolean) => void;
   onClose: () => void;
   busy: boolean;
   onSave: (changes: Change[], label: string) => void;
 }) {
   const [s, setS] = useState(p.plan_start);
   const [e, setE] = useState(p.due);
-  const [tail, setTail] = useState(false);
-  const [work, setWork] = useState(true);
   const INPUT = "min-h-11 rounded border border-ink-sub bg-white px-2 text-base";
-  const idx = it.procs.findIndex((x) => x.id === p.id);
-  const after = it.procs.slice(idx + 1).filter((x) => !x.done_at && (x.plan_start || x.due));
-
-  const shift = (d: string, n: number) => shiftDate(d, n, work, isOff);
-  /** 動かした日数（work なら稼働日の数） */
-  const moved = (): number => {
-    const a = (p.due || p.plan_start).slice(0, 10);
-    const b = (e || s).slice(0, 10);
-    if (!a || !b || a === b) return 0;
-    if (!work) return diffDays(a, b);
-    const step = b > a ? 1 : -1;
-    let n = 0;
-    let x = a;
-    while (x !== b) {
-      x = addDays(x, step);
-      if (!isOff(x)) n += step;
-    }
-    return n;
-  };
+  const after = laterProcs(it, p);
 
   const save = () => {
-    const n = tail ? moved() : 0;
-    const changes: Change[] = [
-      { pid: p.id, s: s.trim(), e: e.trim(), base: { s: p.plan_start, e: p.due } },
-      ...(n ? after.map((x) => ({ pid: x.id, s: shift(x.plan_start, n), e: shift(x.due, n), base: { s: x.plan_start, e: x.due } })) : []),
-    ];
-    if (n && !confirm(`${p.name}と、後ろの工程 ${after.length}個を ${n > 0 ? "+" : ""}${n}日${work ? "（稼働日）" : ""}ずらします。よろしいですか？`)) return;
-    onSave(changes, `予定の変更 ${it.mgmt_no} ${p.name}${n ? `と後ろ${after.length}個` : ""}`);
+    const ns = s.trim();
+    const ne = e.trim();
+    const { changes, later } = planMany([{ it, p, ns, ne }], cascade, work, isOff);
+    // 日付を変えていなくても、空白を消したなどで送るものがあれば送る（無ければ閉じるだけ）
+    if (!changes.length) return onClose();
+    const n = daysBetween((p.due || p.plan_start).slice(0, 10), (p.due ? ne : ns).slice(0, 10), work, isOff);
+    if (later && !confirm(`${p.name}と、後ろの工程 ${later}個を ${n > 0 ? "+" : ""}${n}日${work ? "（稼働日）" : ""}ずらします。よろしいですか？`)) return;
+    onSave(changes, `予定の変更 ${it.mgmt_no} ${p.name}${later ? `と後ろ${later}個` : ""}`);
   };
 
   return (
@@ -618,7 +720,7 @@ function EditBox({
       {after.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-4">
           <label className="flex min-h-11 items-center gap-2 text-base">
-            <input type="checkbox" checked={tail} onChange={(ev) => setTail(ev.target.checked)} className="h-5 w-5" />
+            <input type="checkbox" checked={cascade} onChange={(ev) => setCascade(ev.target.checked)} className="h-5 w-5" />
             後ろの工程（{after.length}個）も同じだけずらす
           </label>
           <label className="flex min-h-11 items-center gap-2 text-base">
