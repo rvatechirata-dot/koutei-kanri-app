@@ -7,10 +7,13 @@
  * 試作は棒を引っぱって動かしたが、ここでは押して日付を直す（指で誤って動かさないため）。
  * 複数選ぶ（試作と同じ）：Ctrl か Shift を押しながら棒を押す／「複数選ぶ」を入れて押す と、選ぶ・外すになる。
  *   選んだ棒は上の帯の「−1日」「＋1日」「○日ずらす」で、全部同じだけ動かす（開始予定と納期の両方）。Esc か「選ぶのをやめる」で外す。
- *   引っぱって動かすことはしない（指で誤って動かさないため）。動かす前に確かめる。
+ *   動かす前に確かめる。
+ * マウスで引っぱる（2026-11-11 川﨑部長の希望）：パソコンのマウスだけ、棒を左右に引っぱると1日単位で動く（右の端をつかむと納期だけ）。
+ *   選んでいる棒の1本をつかむと、選んだ棒が全部一緒に動く。指（タッチ）とペンでは引っぱれない（指で誤って動かさないため。押すと日付の小窓）。
+ *   引っぱった日数はカレンダーの日数（見えている升目どおり）。放すとすぐ保存し、「元に戻す」で戻せる。引っぱっている途中の Esc でやめる。
  * 元に戻す（1回）：直前に保存した予定の変更を、変える前の予定に戻す（ほかの人が間に変えていたら、サーバーが断る）。
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Board, BoardItem, BoardProc } from "@/lib/kotei/board";
 import { todayJst } from "@/lib/kotei/time";
 import { isItemDone } from "@/lib/kotei/rules";
@@ -33,6 +36,8 @@ const addDays = (d: string, n: number) => fromUtc(toUtc(d) + n * 86400000);
 const diffDays = (a: string, b: string) => Math.round((toUtc(b) - toUtc(a)) / 86400000);
 
 type Change = { pid: string; s: string; e: string; base: { s: string; e: string } };
+/** マウスで引っぱっている途中の様子（mode：move＝棒ごと／end＝納期だけ） */
+type Drag = { pid: string; ids: string[]; mode: "move" | "end"; x0: number; k: number; moved: boolean; cx: number; cy: number; minK: number };
 
 /** 予定の文字（YYYY/MM/DD か YYYY/MM/DD HH:MM）を、時刻はそのままで n 日ずらす（work なら土日・休日を数えない） */
 function shiftDate(d: string, n: number, work: boolean, isOff: (d: string) => boolean): string {
@@ -74,6 +79,11 @@ export default function GanttView() {
   /** 元に戻す（1回）：直前の変更を戻すための中身 */
   const [undo, setUndo] = useState<{ label: string; changes: Change[] } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [drag, setDrag] = useState<Drag | null>(null);
+  /** 引っぱり終わった直後の「押した」を無視する印（引っぱりを押したと取り違えないため） */
+  const dragged = useRef(false);
+  /** 引っぱりの最新の様子（マウスの動きをすぐ追うため、画面の状態とは別に持つ） */
+  const dragRef = useRef<Drag | null>(null);
 
   const load = useCallback(
     () =>
@@ -168,6 +178,82 @@ export default function GanttView() {
     await sendPlan(changes, `予定の変更 ${list.length}本まとめて（${days}）`);
   };
 
+  /** 放したら保存する（カレンダーの日数で動かす） */
+  const dropDrag = useCallback(
+    async (d: Drag) => {
+      if (!d.moved) return;
+      dragged.current = true;
+      setTimeout(() => (dragged.current = false), 0);
+      if (!d.k) return;
+      const list = d.ids.map((id) => byPid.get(id)).filter((x): x is { it: BoardItem; p: BoardProc } => !!x);
+      const changes: Change[] = list.map(({ p }) => ({
+        pid: p.id,
+        s: d.mode === "move" ? shiftDate(p.plan_start, d.k, false, isOff) : p.plan_start,
+        e: shiftDate(p.due, d.k, false, isOff),
+        base: { s: p.plan_start, e: p.due },
+      }));
+      const one = list.length === 1 ? `${list[0].it.mgmt_no} ${list[0].p.name}` : `${list.length}本まとめて`;
+      await sendPlan(changes, `予定の変更 ${one}（引っぱって${d.mode === "end" ? "納期を" : ""}${d.k > 0 ? "+" : ""}${d.k}日）`);
+    },
+    [byPid, isOff, sendPlan]
+  );
+
+  /** マウスで棒をつかむ（指・ペンでは何もしない＝押して小窓のまま） */
+  const startDrag = (p: BoardProc, ev: React.PointerEvent<HTMLElement>) => {
+    if (ev.pointerType !== "mouse" || ev.button !== 0 || busy) return;
+    ev.preventDefault();
+    const mode = (ev.target as HTMLElement).dataset.edge ? "end" : "move";
+    const ids = sel.has(p.id) ? [...sel] : [p.id];
+    // 納期だけ動かすとき、開始予定より前にはしない（いちばん短い棒に合わせる）
+    const minK =
+      mode === "end"
+        ? -Math.min(
+            ...ids.map((id) => {
+              const x = byPid.get(id)?.p;
+              return x && x.plan_start && x.due ? Math.max(0, diffDays(x.plan_start.slice(0, 10), x.due.slice(0, 10))) : 0;
+            })
+          )
+        : -Infinity;
+    const first: Drag = { pid: p.id, ids, mode, x0: ev.clientX, k: 0, moved: false, cx: ev.clientX, cy: ev.clientY, minK };
+    dragRef.current = first;
+    setDrag(first);
+    // つかんだその場で、画面のどこでマウスを動かしても追う（すばやく動かしても取りこぼさない）
+    const move = (e: PointerEvent) => {
+      const d = dragRef.current;
+      if (!d) return;
+      const dx = e.clientX - d.x0;
+      const moved = d.moved || Math.abs(dx) > 4;
+      const nd = { ...d, moved, k: moved ? Math.max(Math.round(dx / DAY_W), d.minK) : 0, cx: e.clientX, cy: e.clientY };
+      dragRef.current = nd;
+      setDrag(nd);
+    };
+    const stop = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("keydown", key, true);
+      dragRef.current = null;
+      setDrag(null);
+    };
+    const up = (e: PointerEvent) => {
+      move(e);
+      const d = dragRef.current;
+      stop();
+      if (d) void dropDrag(d);
+    };
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopImmediatePropagation();
+      if (dragRef.current?.moved) {
+        dragged.current = true;
+        setTimeout(() => (dragged.current = false), 0);
+      }
+      stop();
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("keydown", key, true);
+  };
+
   const doUndo = async () => {
     if (!undo) return;
     if (!confirm(`直前の変更（${undo.label}）を元に戻します。よろしいですか？`)) return;
@@ -257,7 +343,7 @@ export default function GanttView() {
         <div
           role="region"
           aria-label="選んだ棒をまとめて動かす"
-          className="fixed inset-x-4 bottom-20 z-30 mx-auto flex max-w-4xl flex-wrap items-center gap-2 rounded-lg border-2 border-accent bg-white p-4 shadow-lg"
+          className="fixed inset-x-4 bottom-2 z-30 mx-auto flex max-w-4xl flex-wrap items-center gap-2 rounded-lg border-2 border-accent bg-white p-4 shadow-lg"
         >
           <b className="text-base">{sel.size}本 選んでいます</b>
           <button type="button" disabled={busy} onClick={() => shiftSelected(-1)} className={`${SUB} disabled:opacity-50`}>
@@ -296,7 +382,7 @@ export default function GanttView() {
       <p className="mt-2 text-sm text-ink-sub">
         棒＝開始予定〜納期。灰色の列は土日・休日。
         {admin
-          ? "棒を押すと予定を直せます。何本かまとめて動かすときは、Ctrl（か Shift）を押しながら押すか、「複数選ぶ」を入れて押します（前へは −3 のように入れます）。"
+          ? "棒を押すと予定を直せます。パソコンのマウスなら棒を左右に引っぱっても動きます（右の端をつかむと納期だけ）。何本かまとめて動かすときは、Ctrl（か Shift）を押しながら押すか、「複数選ぶ」を入れて押します（前へは −3 のように入れます）。"
           : "予定を直せるのは管理者だけです。"}{" "}
         {rows.length}件
       </p>
@@ -330,7 +416,10 @@ export default function GanttView() {
               isOff={isOff}
               admin={admin}
               sel={sel}
+              drag={drag}
+              onGrab={startDrag}
               onPick={(p, multi) => {
+                if (dragged.current) return;
                 if (multi || selMode) {
                   if (p.done_at) return setMsg({ text: `${p.name}は完了しているので、まとめて動かす方には入れません。`, bad: true });
                   return toggle(p.id);
@@ -342,6 +431,15 @@ export default function GanttView() {
           ))}
         </div>
       </div>
+
+      {drag?.moved && (
+        <div role="status" className="pointer-events-none fixed z-50 rounded border border-accent bg-white px-2 py-1 text-base font-bold shadow" style={{ left: drag.cx + 12, top: drag.cy + 14 }}>
+          {drag.ids.length > 1 ? `${drag.ids.length}本まとめて ` : ""}
+          {drag.mode === "end" ? "納期を" : ""}
+          {drag.k > 0 ? "+" : ""}
+          {drag.k}日{drag.k === 0 ? "（動かさない）" : ""}
+        </div>
+      )}
 
       {edit && (
         <EditBox
@@ -366,6 +464,8 @@ function GRow({
   isOff,
   admin,
   sel,
+  drag,
+  onGrab,
   onPick,
 }: {
   it: BoardItem;
@@ -374,6 +474,8 @@ function GRow({
   isOff: (d: string) => boolean;
   admin: boolean;
   sel: Set<string>;
+  drag: Drag | null;
+  onGrab: (p: BoardProc, ev: React.PointerEvent<HTMLElement>) => void;
   onPick: (p: BoardProc, multi: boolean) => void;
 }) {
   const first = days[0];
@@ -417,23 +519,29 @@ function GRow({
                 ? "border-danger bg-white text-danger font-bold"
                 : "border-ink-sub bg-white";
           const on = sel.has(p.id);
-          const left = Math.max(a, 0) * DAY_W;
-          const w = (Math.min(b, days.length - 1) - Math.max(a, 0) + 1) * DAY_W;
+          let left = Math.max(a, 0) * DAY_W;
+          let w = (Math.min(b, days.length - 1) - Math.max(a, 0) + 1) * DAY_W;
+          // 引っぱっている途中は、その日数ぶん動かして見せる
+          const dragging = !!drag?.moved && drag.ids.includes(p.id);
+          if (dragging && drag.mode === "move") left += drag.k * DAY_W;
+          if (dragging && drag.mode === "end") w += drag.k * DAY_W;
           return (
             <button
               key={p.id}
               type="button"
               disabled={!admin}
               aria-pressed={admin ? on : undefined}
+              onPointerDown={admin ? (ev) => onGrab(p, ev) : undefined}
               onClick={(ev) => onPick(p, ev.ctrlKey || ev.metaKey || ev.shiftKey)}
               title={`${p.name}\n開始予定 ${p.plan_start || "－"}\n納期 ${p.due || "－"}${p.done_at ? `\n完了 ${p.done_at}` : ""}`}
-              className={`absolute flex items-center overflow-hidden rounded border px-1 text-left text-sm whitespace-nowrap ${cls} ${on ? "outline outline-4 outline-accent" : ""} ${admin ? "" : "cursor-default"}`}
+              className={`absolute flex items-center overflow-hidden rounded border px-1 text-left text-sm whitespace-nowrap ${cls} ${on ? "outline outline-4 outline-accent" : ""} ${dragging ? "z-10 opacity-80 shadow-lg" : ""} ${admin ? "cursor-grab select-none" : "cursor-default"}`}
               style={{ top: 4 + k * 40, left, width: Math.max(w, DAY_W), height: 36 }}
             >
               {on && <span className="mr-1 font-bold text-accent">✓選</span>}
               {st && <span className="mr-1">{st}</span>}
               {p.in_out === "外注" && <span className="mr-1">外注</span>}
               {p.name}
+              {admin && <span data-edge="1" aria-hidden className="absolute top-0 right-0 bottom-0 w-2 cursor-ew-resize" />}
             </button>
           );
         })}
