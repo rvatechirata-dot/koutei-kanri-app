@@ -3,8 +3,9 @@
 /**
  * ガント（4段目）。横棒＝工程の「開始予定〜納期」。色と字で まだ／中（作業中）／済（完了）／遅れ（納期すぎで終わっていない）。
  * 土日・休日は灰色、今日は青い縦線。棒を押すと（管理者だけ）開始予定・納期を直せる。
- * 上の帯の「後ろの工程もずらす」（初めはオン・試作と同じ）：小窓・引っぱる・まとめてずらす のどれで動かしても、
- *   納期を動かした日数だけ、同じ品目の後ろの工程（まだ終わっていないもの。出荷も入る）も同じだけずらす。
+ * 上の帯の「前後の工程も連動する」（初めはオン）：小窓・引っぱる・まとめてずらす のどれで動かしても、動かした向きで決める。
+ *   遅らせた → 同じ品目の後ろの工程だけ、早めた → 前の工程だけ を、納期を動かした日数だけずらす（まだ終わっていないもの。出荷も入る）。
+ *   右の端で納期だけ延ばす・縮めるときも同じ。オフなら動かした棒だけ。
  *   「休日を数えない」（初めはオン）なら稼働日の数に直してずらす。2本以上選んでいても、同じ工程は1回だけ動かす。
  *   2つの印はそのパソコンに覚えておく。
  * 動かしたら、保存を待たずに行き先の位置で見せる（2026-11-11。保存に失敗したら元に戻して知らせる）。
@@ -16,7 +17,7 @@
  *   引っぱった日数はカレンダーの日数（見えている升目どおり）。放すとすぐ保存し、「元に戻す」で戻せる。引っぱっている途中の Esc でやめる。
  * 元に戻す・やり直す（2026-11-11〜 画面を開いている間は何回でも）：保存した予定の変更を、新しい方から順に戻す・戻したものをもう一度する
  *   （ほかの人が間に変えていたら、サーバーが断り、その1回分は捨てる）。新しく動かすと、やり直すの方は消える。
- * 前の工程もずらす（2026-11-11〜 初めはオフ）：後ろの工程と同じ量で、同じ品目の前の工程（未完了のもの）もずらす。
+ * （2026-11-11 夕方まであった「前の工程もずらす」「後ろの工程もずらす」の2つは、向きで決める上の1つにまとめた）
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Board, BoardItem, BoardProc } from "@/lib/kotei/board";
@@ -88,18 +89,21 @@ const earlierProcs = (it: BoardItem, p: BoardProc) => {
   return it.procs.slice(0, Math.max(i, 0)).filter((x) => !x.done_at && (x.plan_start || x.due));
 };
 
-/** 上の帯の印：後ろの工程もずらす（初めはオン）・前の工程もずらす（初めはオフ）・休日を数えない（初めはオン） */
-type Opt = { cascade: boolean; back: boolean; work: boolean };
+/** 上の帯の印：前後の工程も連動する（初めはオン）・休日を数えない（初めはオン） */
+type Opt = { link: boolean; work: boolean };
 
 /**
- * 動かした棒の新しい予定から、送る中身を作る（試作の gPlanMany と同じ）。
- * 動かした棒はそのとおりに。cascade なら後ろの工程、back なら前の工程を、「納期の動き（納期が無ければ開始予定の動き）」だけずらす
- * （work なら稼働日の数に直してずらす）。同じ工程は1回だけ（選んだ棒・ほかの棒の前後で重なっても二重に動かさない）。
- * word は「と前1個・後ろ2個」のような、知らせに足す言葉。
+ * 動かした棒の新しい予定から、送る中身を作る。動かした棒はそのとおりに。
+ * link なら、動かした向きで一緒に動く工程を決める（2026-11-11 川﨑部長の指示「A,B,C,D で C を後ろに動かすと D だけ、前に動かすと A,B だけ」）：
+ *   遅らせた（＋）→ 同じ品目の後ろの工程だけ／早めた（−）→ 同じ品目の前の工程だけ を、
+ *   「納期の動き（納期が無ければ開始予定の動き）」だけずらす（work なら稼働日の数に直してずらす）。
+ * 同じ品目の棒を2本以上動かしたときは、遅らせるなら選んだうちいちばん後ろの棒より後ろ、早めるならいちばん前の棒より前だけ
+ * （選んだ棒の間の工程は動かさない）。同じ工程は1回だけ動かす。
+ * word は「と前1個」「と後ろ2個」のような、知らせに足す言葉。
  */
 function planMany(
   list: (Hit & { ns: string; ne: string })[],
-  { cascade, back, work }: Opt,
+  { link, work }: Opt,
   isOff: (d: string) => boolean
 ): { changes: Change[]; front: number; later: number; word: string } {
   const map = new Map<string, Change>();
@@ -108,22 +112,36 @@ function planMany(
   };
   list.forEach((x) => put(x.p, x.ns, x.ne));
   const fronts = new Set<string>();
-  if (cascade || back) {
-    [...list]
-      .sort((x, y) => x.it.procs.findIndex((q) => q.id === x.p.id) - y.it.procs.findIndex((q) => q.id === y.p.id))
-      .forEach((x) => {
-        const o = (x.p.due || x.p.plan_start).slice(0, 10);
-        const m = (x.p.due ? x.ne : x.ns).slice(0, 10);
-        const k = daysBetween(o, m, work, isOff);
-        if (!o || !m || !k) return;
-        const mv = (q: BoardProc) => put(q, shiftDate(q.plan_start, k, work, isOff), shiftDate(q.due, k, work, isOff));
-        if (back)
-          earlierProcs(x.it, x.p).forEach((q) => {
-            if (!map.has(q.id)) fronts.add(q.id);
-            mv(q);
-          });
-        if (cascade) laterProcs(x.it, x.p).forEach(mv);
-      });
+  if (link) {
+    // 品目ごとに、選んだ棒を工程の並び順にまとめる
+    const groups = new Map<BoardItem, (Hit & { ns: string; ne: string; idx: number })[]>();
+    list.forEach((x) => {
+      const g = groups.get(x.it) ?? [];
+      g.push({ ...x, idx: x.it.procs.findIndex((q) => q.id === x.p.id) });
+      groups.set(x.it, g);
+    });
+    /** その棒が何日動いたか（納期の動き。納期が無ければ開始予定の動き） */
+    const moved = (x: Hit & { ns: string; ne: string }) => {
+      const o = (x.p.due || x.p.plan_start).slice(0, 10);
+      const m = (x.p.due ? x.ne : x.ns).slice(0, 10);
+      return o && m ? daysBetween(o, m, work, isOff) : 0;
+    };
+    const mv = (q: BoardProc, k: number) => put(q, shiftDate(q.plan_start, k, work, isOff), shiftDate(q.due, k, work, isOff));
+    groups.forEach((g, it) => {
+      g.sort((a, b) => a.idx - b.idx);
+      const last = g[g.length - 1];
+      const first = g[0];
+      const kl = moved(last);
+      const kf = moved(first);
+      // 遅らせた → いちばん後ろの棒より後ろだけ
+      if (kl > 0) laterProcs(it, last.p).forEach((q) => mv(q, kl));
+      // 早めた → いちばん前の棒より前だけ
+      if (kf < 0)
+        earlierProcs(it, first.p).forEach((q) => {
+          if (!map.has(q.id)) fronts.add(q.id);
+          mv(q, kf);
+        });
+    });
   }
   const changes = [...map.values()].filter((c) => c.s !== c.base.s || c.e !== c.base.e);
   const others = changes.filter((c) => !list.some((x) => x.p.id === c.pid));
@@ -138,9 +156,10 @@ const PREF_KEY = "kotei-gantt-pref";
 const readPref = (): Opt => {
   try {
     const v = JSON.parse(localStorage.getItem(PREF_KEY) || "{}");
-    return { cascade: v.cascade !== false, back: v.back === true, work: v.work !== false };
+    // 前の版で「後ろの工程もずらす」を外していた人は、オフのまま始める
+    return { link: typeof v.link === "boolean" ? v.link : v.cascade !== false, work: v.work !== false };
   } catch {
-    return { cascade: true, back: false, work: true };
+    return { link: true, work: true };
   }
 };
 
@@ -165,10 +184,10 @@ export default function GanttView() {
   /** 「複数選ぶ」を入れているか（タブレット用。入れると棒を押すたびに選ぶ・外す） */
   const [selMode, setSelMode] = useState(false);
   const [shiftN, setShiftN] = useState("1");
-  /** 後ろの工程もずらす（初めはオン・試作と同じ）／前の工程もずらす（初めはオフ）／休日を数えない（稼働日でずらす） */
+  /** 前後の工程も連動する（初めはオン。遅らせる→後ろ・早める→前）／休日を数えない（稼働日でずらす） */
   // 最初の表示は「読み込み中…」だけなので、サーバーで作る画面と食い違わない
   const [opt, setOptRaw] = useState<Opt>(readPref);
-  const { cascade, back, work } = opt;
+  const { link, work } = opt;
   const setOpt = (v: Partial<Opt>) => {
     const n = { ...opt, ...v };
     setOptRaw(n);
@@ -327,7 +346,7 @@ export default function GanttView() {
       setTimeout(() => (dragged.current = false), 0);
       if (!d.k) return;
       const list = d.ids.map((id) => byPid.get(id)).filter((x): x is Hit => !!x);
-      // 引っぱった棒はカレンダーの日数で動かす。後ろの工程は、納期の動きを（休日を数えないなら稼働日に直して）ずらす
+      // 引っぱった棒はカレンダーの日数で動かす。一緒に動く前後の工程は、納期の動きを（休日を数えないなら稼働日に直して）ずらす
       const { changes, word } = planMany(
         list.map((x) => ({ ...x, ns: d.mode === "move" ? shiftDate(x.p.plan_start, d.k, false, isOff) : x.p.plan_start, ne: shiftDate(x.p.due, d.k, false, isOff) })),
         opt,
@@ -484,13 +503,9 @@ export default function GanttView() {
           <button type="button" disabled={!redo || busy} onClick={doRedo} title={redo ? redo.label : ""} className={`${SUB} disabled:opacity-50`}>
             ↷ やり直す{redos.length > 1 ? `（${redos.length}）` : ""}
           </button>
-          <label className="flex min-h-11 items-center gap-2 text-base">
-            <input type="checkbox" checked={back} onChange={(e) => setOpt({ back: e.target.checked })} className="h-5 w-5" />
-            前の工程もずらす
-          </label>
-          <label className="flex min-h-11 items-center gap-2 text-base">
-            <input type="checkbox" checked={cascade} onChange={(e) => setOpt({ cascade: e.target.checked })} className="h-5 w-5" />
-            後ろの工程もずらす
+          <label className="flex min-h-11 items-center gap-2 text-base" title="遅らせると後ろの工程だけ、早めると前の工程だけが同じだけずれます">
+            <input type="checkbox" checked={link} onChange={(e) => setOpt({ link: e.target.checked })} className="h-5 w-5" />
+            前後の工程も連動する（遅らせる→後ろ・早める→前）
           </label>
           <label className="flex min-h-11 items-center gap-2 text-base">
             <input type="checkbox" checked={work} onChange={(e) => setOpt({ work: e.target.checked })} className="h-5 w-5" />
@@ -539,8 +554,7 @@ export default function GanttView() {
           </button>
           <span className="text-sm text-ink-sub">
             {work ? "休日を数えない" : "カレンダーの日数"}
-            {back ? "・前の工程もずらす" : ""}
-            {cascade ? "・後ろの工程もずらす" : ""}
+            {link ? "・前後の工程も連動（＋は後ろ・−は前）" : "・選んだ棒だけ"}
           </span>
           <button type="button" onClick={() => setSel(new Set())} className={SUB}>
             選ぶのをやめる（Esc）
@@ -742,7 +756,7 @@ function EditBox({
   const [s, setS] = useState(p.plan_start);
   const [e, setE] = useState(p.due);
   const INPUT = "min-h-11 rounded border border-ink-sub bg-white px-2 text-base";
-  const { cascade, back, work } = opt;
+  const { link, work } = opt;
   const after = laterProcs(it, p);
   const before = earlierProcs(it, p);
 
@@ -774,18 +788,10 @@ function EditBox({
       </div>
       {(after.length > 0 || before.length > 0) && (
         <div className="mt-2 flex flex-wrap gap-4">
-          {before.length > 0 && (
-            <label className="flex min-h-11 items-center gap-2 text-base">
-              <input type="checkbox" checked={back} onChange={(ev) => setOpt({ back: ev.target.checked })} className="h-5 w-5" />
-              前の工程（{before.length}個）も同じだけずらす
-            </label>
-          )}
-          {after.length > 0 && (
-            <label className="flex min-h-11 items-center gap-2 text-base">
-              <input type="checkbox" checked={cascade} onChange={(ev) => setOpt({ cascade: ev.target.checked })} className="h-5 w-5" />
-              後ろの工程（{after.length}個）も同じだけずらす
-            </label>
-          )}
+          <label className="flex min-h-11 items-center gap-2 text-base">
+            <input type="checkbox" checked={link} onChange={(ev) => setOpt({ link: ev.target.checked })} className="h-5 w-5" />
+            前後の工程も連動する（遅らせる→後ろ{after.length}個・早める→前{before.length}個）
+          </label>
           <label className="flex min-h-11 items-center gap-2 text-base">
             <input type="checkbox" checked={work} onChange={(ev) => setOpt({ work: ev.target.checked })} className="h-5 w-5" />
             休日を数えない（稼働日でずらす）
