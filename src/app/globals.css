@@ -41,7 +41,8 @@ body { color: var(--color-ink); background: #FFFFFF; line-height: 1.25; -webkit-
   height: 16px;
   margin-bottom: 4px;
 }
-@media (hover: none) and (pointer: coarse) {
+/* 2026-11-17 画面にタッチできるPC（平田さんのPC）は「マウスあり」とも判定されず上のバーが消えていたので、幅1100px以上ならPCとして必ず出す */
+@media (hover: none) and (pointer: coarse) and (max-width: 1099px) {
   .tbl-topbar {
     display: none;
   }
