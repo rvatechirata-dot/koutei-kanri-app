@@ -7,7 +7,8 @@
  *   色だけで伝えないよう、札の頭に「済・中・次」の字を付ける（WEBデザインルール）。外注・出荷も字で付ける。
  * 上の「今の工程ごとの数」を押すと、その工程にいる品目だけに絞る（受注がいまどこにいるかの全体像）。
  * 見方は川﨑部長の試作の工程一覧（index.html rowHtml）と同じ。
- * 2段目：札を押すと、その品目の下に小窓（ProcPanel）が開き、開始・完了・作業を押せる。
+ * 2段目：札を押すと、工程の大きい画面（ProcPanel・画面に重ねる）が開き、開始・完了・作業を押せる。
+ * 品目（管理番号）を押すと、工程カード（ProcCards・エムネットと同じ並び）が開く（2026-11-22）。
  *   行の左のチェックで選んだ品目の「今の工程」を、まとめて完了にできる。
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -217,6 +218,25 @@ export default function BoardView() {
     it.procs.flatMap((p) => p.works.filter((w) => !w.ended_at && w.worker === worker).map((w) => ({ it, p, w })))
   );
 
+  // 工程カードの大きいボタン（案A）：まだ→開始／作業中→完了（数は作業の合計か品目の数量）。
+  // 出荷の工程と、終えていない作業がある工程は、数を入れるので工程の大きい画面を開く
+  const quick = async (it: BoardItem, p: BoardProc) => {
+    const isShip = stockRole(it.kubun, it.procs)?.ship === p.id;
+    if (isShip || p.works.some((w) => !w.ended_at)) {
+      setPanel({ item: it.id, pid: p.id });
+      return;
+    }
+    if (!p.started_at) {
+      await send([{ op: "start", pid: p.id }], `${p.name}を開始にしました`);
+      return;
+    }
+    const sum = (h: "good_qty" | "defect_qty") => String(Math.round(p.works.reduce((t, w) => t + (Number(w[h]) || 0), 0) * 1000) / 1000);
+    const qty = p.works.length ? sum("good_qty") : p.done_qty || it.qty || "0";
+    const ng = p.works.length ? sum("defect_qty") : p.defect_qty;
+    if (!confirm(`${it.mgmt_no}\n${p.name}を完了にします（完成 ${qty}${Number(ng) > 0 ? `・不良 ${ng}` : ""}）。\n数を直すときは「キャンセル」を押して、工程の名前を押してください。`)) return;
+    await send([{ op: "done", pid: p.id, qty, ng: Number(ng) > 0 ? ng : "", why: p.defect_reason }], `${p.name}を完了にしました`);
+  };
+
   // まとめて完了：選んだ品目の「今の工程」を、品目の数量で完了にする（出荷の工程は残りの数で出荷を記録）
   const bulk = async () => {
     const targets = rows
@@ -377,6 +397,7 @@ export default function BoardView() {
             }}
             panel={(p) => <ProcPanel key={p.id} it={it} p={p} me={me} worker={worker} lists={board.lists} send={send} onClose={() => setPanel(null)} />}
             admin={me.admin}
+            onQuick={(p) => quick(it, p)}
           />
         ))}
       </div>
@@ -433,6 +454,7 @@ function ItemRowView({
   onCheck,
   panel,
   admin,
+  onQuick,
 }: {
   it: BoardItem;
   today: string;
@@ -444,6 +466,7 @@ function ItemRowView({
   onCheck: (on: boolean) => void;
   panel: (p: BoardProc) => React.ReactNode;
   admin: boolean;
+  onQuick: (p: BoardProc) => void;
 }) {
   const cur = curOf(it);
   const done = isDone(it);
@@ -527,12 +550,87 @@ function ItemRowView({
         const p = it.procs.find((x) => x.id === panelPid);
         return p ? panel(p) : null;
       })()}
-      {open && <ItemDetail it={it} admin={admin} />}
+      {open && <ItemDetail it={it} admin={admin} cur={cur} shipId={shipId} onOpen={onChip} onQuick={onQuick} />}
     </div>
   );
 }
 
-function ItemDetail({ it, admin }: { it: BoardItem; admin: boolean }) {
+/**
+ * 品目を開いたときの工程カード（案A・エムネットと同じ並び・2026-11-22 川﨑）。
+ * 1枚＝1工程。状態・機械・担当・数・納期・完了日と、大きいボタン1つ（まだ→開始・作業中→完了・完了→開く）。
+ * 右の細い列が作業の記録（だれが・いつ・何個）。カードの名前や作業の記録を押すと、工程の大きい画面（ProcPanel）が開いて直せる。
+ */
+function ProcCards({ it, cur, shipId, onOpen, onQuick }: { it: BoardItem; cur: BoardProc | null; shipId: string; onOpen: (pid: string) => void; onQuick: (p: BoardProc) => void }) {
+  return (
+    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+      {it.procs.map((p, k) => {
+        const st = p.done_at ? "done" : p.started_at ? "doing" : cur && cur.id === p.id ? "next" : "todo";
+        const ship = p.id === shipId;
+        const good = p.works.reduce((t, w) => t + (Number(w.good_qty) || 0), 0);
+        const qty = p.done_qty || (good ? String(Math.round(good * 1000) / 1000) : "");
+        const shown = p.works.slice(-3);
+        const btn = p.done_at ? "開く" : !p.started_at ? "▶ 開始" : "✔ 完了";
+        return (
+          <div key={p.id} className={`flex rounded-lg border bg-white ${st === "doing" ? "border-2 border-[#B08A00]" : st === "next" ? "border-2 border-accent" : "border-line"}`}>
+            <div className="min-w-0 flex-1 p-2">
+              <button type="button" onClick={() => onOpen(p.id)} className="flex w-full items-start justify-between gap-2 text-left">
+                <span className="font-bold">
+                  {k + 1} {p.in_out === "外注" && <span className="text-sm">外注 </span>}
+                  {p.name}
+                  {ship && !p.name.includes("出荷") && <span className="ml-1 text-sm">出荷</span>}
+                </span>
+                <span className={`shrink-0 rounded border px-1 text-sm font-bold ${CHIP_STYLE[st]}`}>{{ done: "済 完了", doing: "中 作業中", next: "次", todo: "まだ" }[st]}</span>
+              </button>
+              <dl className="mt-1 grid grid-cols-[4rem_1fr] text-sm">
+                <dt className="text-ink-sub">機械</dt>
+                <dd>{p.machine || "－"}</dd>
+                <dt className="text-ink-sub">担当</dt>
+                <dd>{p.assignee && p.assignee !== "-" ? p.assignee : "－"}</dd>
+                <dt className="text-ink-sub">数</dt>
+                <dd>
+                  {qty || "0"}
+                  {it.qty ? ` / ${it.qty}` : ""}
+                  {Number(p.defect_qty) > 0 && `・不良 ${p.defect_qty}`}
+                </dd>
+                <dt className="text-ink-sub">納期</dt>
+                <dd>{p.due ? p.due.slice(0, 10) : "－"}</dd>
+                <dt className="text-ink-sub">完了日</dt>
+                <dd>{p.done_at ? p.done_at.slice(0, 10) : "未完了"}</dd>
+              </dl>
+              <button
+                type="button"
+                onClick={() => (p.done_at ? onOpen(p.id) : onQuick(p))}
+                className={`mt-2 min-h-11 w-full rounded-lg px-2 text-base font-bold ${p.done_at ? "border border-accent bg-white text-accent" : "bg-accent text-white"}`}
+              >
+                {btn}
+              </button>
+            </div>
+            <button type="button" onClick={() => onOpen(p.id)} className="w-24 shrink-0 border-l border-line bg-card p-1 text-left text-sm" title="押すと作業の記録を直せる">
+              <span className="block text-ink-sub">作業</span>
+              {p.works.length === 0 && <span className="block text-ink-sub">なし</span>}
+              {p.works.length > shown.length && <span className="block text-ink-sub">ほか{p.works.length - shown.length}件</span>}
+              {shown.map((w) => (
+                <span key={w.id} className={`mt-1 block rounded border px-1 leading-snug ${w.ended_at ? "border-line bg-white" : "border-[#B08A00] bg-warn-bg"}`}>
+                  <b>{w.worker}</b>
+                  <br />
+                  {w.started_at.slice(5, 10)} {w.started_at.slice(11)}
+                  <br />〜{w.ended_at ? w.ended_at.slice(11) : <b>作業中</b>}
+                  {w.good_qty && (
+                    <>
+                      <br />数 {w.good_qty}
+                    </>
+                  )}
+                </span>
+              ))}
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ItemDetail({ it, admin, cur, shipId, onOpen, onQuick }: { it: BoardItem; admin: boolean; cur: BoardProc | null; shipId: string; onOpen: (pid: string) => void; onQuick: (p: BoardProc) => void }) {
   return (
     <div className="border-t border-line p-4">
       {admin && (
@@ -540,7 +638,8 @@ function ItemDetail({ it, admin }: { it: BoardItem; admin: boolean }) {
           この案件を直す（品目・工程の並び）
         </Link>
       )}
-      <dl className="grid grid-cols-1 gap-x-8 gap-y-2 text-base sm:grid-cols-2 lg:grid-cols-3">
+      <ProcCards it={it} cur={cur} shipId={shipId} onOpen={onOpen} onQuick={onQuick} />
+      <dl className="mt-4 grid grid-cols-1 gap-x-8 gap-y-2 text-base sm:grid-cols-2 lg:grid-cols-3">
         <Info k="バーコード番号" v={it.barcode} />
         <Info k="顧客発注番号" v={it.customer_po} />
         <Info k="受注日" v={it.order_date} />
@@ -548,7 +647,9 @@ function ItemDetail({ it, admin }: { it: BoardItem; admin: boolean }) {
         <Info k="最終納期" v={it.final_due} />
         <Info k="数量" v={it.qty} />
       </dl>
-      <ScrollWrap className="mt-4">
+      <details className="mt-4">
+        <summary className="cursor-pointer text-base text-accent">工程を表で見る（開始予定・開始・コメントなど）</summary>
+      <ScrollWrap className="mt-2">
         <table className="w-full text-base">
           <thead className="bg-card">
             <tr>
@@ -585,6 +686,7 @@ function ItemDetail({ it, admin }: { it: BoardItem; admin: boolean }) {
           </tbody>
         </table>
       </ScrollWrap>
+      </details>
       {(it.knowhow || it.note) && (
         <div className="mt-4 text-base">
           {it.knowhow && <p className="whitespace-pre-wrap">ノウハウ：{it.knowhow}</p>}
