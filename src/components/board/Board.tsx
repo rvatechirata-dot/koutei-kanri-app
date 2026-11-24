@@ -19,9 +19,10 @@ import { isItemDone, stockRole } from "@/lib/kotei/rules";
 import { todayJst } from "@/lib/kotei/time";
 import ScrollWrap from "@/components/ScrollWrap";
 import ProcPanel, { type Send } from "./ProcPanel";
+import MemoBox, { MemoMarks } from "./MemoBox";
 
 type Status = "open" | "done" | "all";
-type Me = { name: string; named: boolean; admin: boolean };
+type Me = { name: string; named: boolean; admin: boolean; email?: string };
 type BoardRes = Board & { me: Me };
 
 const PAGE = 200;
@@ -395,7 +396,8 @@ export default function BoardView() {
               else n.delete(it.id);
               setSel(n);
             }}
-            panel={(p) => <ProcPanel key={p.id} it={it} p={p} me={me} worker={worker} lists={board.lists} send={send} onClose={() => setPanel(null)} />}
+            panel={(p) => <ProcPanel key={p.id} it={it} p={p} me={me} worker={worker} lists={board.lists} send={send} onClose={() => setPanel(null)} onMemoSaved={() => show(fetchBoard())} />}
+            memo={() => <MemoBox it={it} me={me} worker={worker} onSaved={() => show(fetchBoard())} />}
             admin={me.admin}
             onQuick={(p) => quick(it, p)}
           />
@@ -455,6 +457,7 @@ function ItemRowView({
   panel,
   admin,
   onQuick,
+  memo,
 }: {
   it: BoardItem;
   today: string;
@@ -467,6 +470,7 @@ function ItemRowView({
   panel: (p: BoardProc) => React.ReactNode;
   admin: boolean;
   onQuick: (p: BoardProc) => void;
+  memo: () => React.ReactNode;
 }) {
   const cur = curOf(it);
   const done = isDone(it);
@@ -489,6 +493,7 @@ function ItemRowView({
             <span className="text-base font-bold">{it.mgmt_no || "（管理番号なし）"}</span>
             {it.kubun && <span className="rounded border border-line px-1 text-sm">{it.kubun}</span>}
             {(it.hidden === "1" || it.case_hidden === "1") && <span className="rounded border border-line px-1 text-sm">隠す</span>}
+            <MemoMarks it={it} />
           </span>
           <span className="text-base">
             {it.drawing_no} {it.name}
@@ -550,7 +555,7 @@ function ItemRowView({
         const p = it.procs.find((x) => x.id === panelPid);
         return p ? panel(p) : null;
       })()}
-      {open && <ItemDetail it={it} admin={admin} cur={cur} shipId={shipId} onOpen={onChip} onQuick={onQuick} />}
+      {open && <ItemDetail it={it} admin={admin} cur={cur} shipId={shipId} onOpen={onChip} onQuick={onQuick} memo={memo} />}
     </div>
   );
 }
@@ -630,7 +635,7 @@ function ProcCards({ it, cur, shipId, onOpen, onQuick }: { it: BoardItem; cur: B
   );
 }
 
-function ItemDetail({ it, admin, cur, shipId, onOpen, onQuick }: { it: BoardItem; admin: boolean; cur: BoardProc | null; shipId: string; onOpen: (pid: string) => void; onQuick: (p: BoardProc) => void }) {
+function ItemDetail({ it, admin, cur, shipId, onOpen, onQuick, memo }: { it: BoardItem; admin: boolean; cur: BoardProc | null; shipId: string; onOpen: (pid: string) => void; onQuick: (p: BoardProc) => void; memo: () => React.ReactNode }) {
   return (
     <div className="border-t border-line p-4">
       {admin && (
@@ -638,6 +643,8 @@ function ItemDetail({ it, admin, cur, shipId, onOpen, onQuick }: { it: BoardItem
           この案件を直す（品目・工程の並び）
         </Link>
       )}
+      {/* 案件メモ欄（品番の注意＋この案件のメモ・2026-11-24） */}
+      <div className="mb-4">{memo()}</div>
       <ProcCards it={it} cur={cur} shipId={shipId} onOpen={onOpen} onQuick={onQuick} />
       <dl className="mt-4 grid grid-cols-1 gap-x-8 gap-y-2 text-base sm:grid-cols-2 lg:grid-cols-3">
         <Info k="バーコード番号" v={it.barcode} />

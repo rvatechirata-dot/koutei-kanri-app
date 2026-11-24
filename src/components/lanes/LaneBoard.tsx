@@ -33,9 +33,10 @@ import type { Act } from "@/lib/kotei/acts";
 import { isItemDone, stockRole } from "@/lib/kotei/rules";
 import { todayJst } from "@/lib/kotei/time";
 import ProcPanel from "@/components/board/ProcPanel";
+import { MemoMarks } from "@/components/board/MemoBox";
 import { loadPick, postActs } from "@/components/board/postActs";
 
-type Me = { name: string; named: boolean; admin: boolean };
+type Me = { name: string; named: boolean; admin: boolean; email?: string };
 type BoardRes = Board & { me: Me };
 interface Card {
   it: BoardItem;
@@ -475,6 +476,7 @@ export default function LaneBoard() {
                 return ok;
               }}
               onClose={() => setOpen(null)}
+              onMemoSaved={() => load(q)}
             />
           </div>
         </div>
@@ -581,6 +583,7 @@ function CardView({ card, compact, today, onOpen, overlay }: { card: Card; compa
     >
       <span className="flex w-full items-center gap-1">
         <b className="truncate text-base">{it.mgmt_no}</b>
+        <MemoMarks it={it} />
         {doing && <span className="ml-auto shrink-0 rounded border border-[#B08A00] px-1 text-sm font-bold">中</span>}
       </span>
       <span className="w-full truncate text-sm">

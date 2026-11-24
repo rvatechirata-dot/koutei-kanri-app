@@ -13,6 +13,7 @@ import type { BoardItem, BoardProc, BoardWork } from "@/lib/kotei/board";
 import type { Act } from "@/lib/kotei/acts";
 import { stockRole } from "@/lib/kotei/rules";
 import ShipForm from "./ShipForm";
+import MemoBox from "./MemoBox";
 
 export type Send = (acts: Act[], doneMsg: string) => Promise<boolean>;
 
@@ -35,14 +36,17 @@ export default function ProcPanel({
   lists,
   send,
   onClose,
+  onMemoSaved,
 }: {
   it: BoardItem;
   p: BoardProc;
-  me: { name: string; admin: boolean };
+  me: { name: string; admin: boolean; named?: boolean; email?: string };
   worker: string;
   lists: { machines: string[]; reasons: string[] };
   send: Send;
   onClose: () => void;
+  /** 案件メモ欄で書いたあとに画面を読み直す */
+  onMemoSaved?: () => void;
 }) {
   const role = stockRole(it.kubun, it.procs);
   const isShip = role?.ship === p.id;
@@ -101,6 +105,11 @@ export default function ProcPanel({
           <button type="button" onClick={onClose} className={`${SUB} ml-auto shrink-0`}>
             閉じる
           </button>
+        </div>
+
+        {/* 案件メモ欄：品番の注意（黄色）を必ず出す・この案件のメモは畳む（2026-11-24） */}
+        <div className="mt-4">
+          <MemoBox it={it} me={{ ...me, named: me.named ?? true }} worker={worker} compact onSaved={onMemoSaved} />
         </div>
 
         {/* 段 */}

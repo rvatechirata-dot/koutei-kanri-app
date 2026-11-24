@@ -74,6 +74,28 @@ export interface BoardItem {
   order_date: string;
   case_hidden: string;
   procs: BoardProc[];
+  /** この案件のメモ（消していないもの・新しい順） */
+  memos: ItemMemo[];
+  /** この品番（図面番号）の製作の注意の今の版（一度も書いていなければ null。body が空＝注意なしに戻した） */
+  dnote: DrawingNote | null;
+}
+
+/** 案件メモ欄（2026-11-24・migration 0003） */
+export interface ItemMemo {
+  id: string;
+  kind: string;
+  body: string;
+  created_at: string;
+  created_by: string;
+  created_name: string;
+}
+export interface DrawingNote {
+  /** 今の版の行ID（直すときに「見ていた版」を伝える） */
+  id: string;
+  drawing_no: string;
+  body: string;
+  saved_at: string;
+  saved_name: string;
 }
 
 export interface Board {
@@ -85,7 +107,7 @@ export interface Board {
 }
 
 export async function loadBoard(db: Db): Promise<Board> {
-  const [ver, items, procs, works, imp, mst, shp] = await db.batch([
+  const [ver, items, procs, works, imp, mst, shp, memos, dnotes] = await db.batch([
     db.prepare("SELECT value FROM settings WHERE key = 'ver'"),
     db.prepare(
       `SELECT i.id, i.barcode, i.kubun, i.drawing_no, i.name, i.qty, i.final_due, i.hidden, i.knowhow, i.note, i.source, i.case_id,
@@ -104,7 +126,20 @@ export async function loadBoard(db: Db): Promise<Board> {
     db.prepare("SELECT at, file FROM import_history ORDER BY id DESC LIMIT 1"),
     db.prepare("SELECT kind, name FROM masters WHERE unused = '' ORDER BY CAST(sort_order AS REAL), name"),
     db.prepare("SELECT id, process_id, ship_date, qty, carrier, slip_no, from_stock FROM shipments WHERE canceled_at = '' ORDER BY ship_date, recorded_at"),
+    db.prepare("SELECT id, item_id, kind, body, created_at, created_by, created_name FROM item_memos WHERE canceled_at = '' ORDER BY rowid DESC"),
+    // 品番の注意は、図面番号ごとにいちばん新しい版だけ（空に戻した版も返す＝直すときの「見ていた版」。画面は body が空なら注意なし）
+    db.prepare(
+      `SELECT d.id, d.drawing_no, d.body, d.saved_at, d.saved_name FROM drawing_notes d
+        WHERE d.rowid = (SELECT MAX(x.rowid) FROM drawing_notes x WHERE x.drawing_no = d.drawing_no)`
+    ),
   ]);
+  const memosBy: Record<string, ItemMemo[]> = {};
+  (memos.results as unknown as (ItemMemo & { item_id: string })[]).forEach((m) => {
+    const { item_id, ...rest } = m;
+    (memosBy[item_id] ||= []).push(rest);
+  });
+  const dnoteBy: Record<string, DrawingNote> = {};
+  (dnotes.results as unknown as DrawingNote[]).forEach((d) => (dnoteBy[d.drawing_no] = d));
   const shipped: Record<string, number> = {};
   const shipsBy: Record<string, BoardProc["ships"]> = {};
   (shp.results as unknown as (BoardProc["ships"][number] & { process_id: string })[]).forEach((r) => {
@@ -142,7 +177,12 @@ export async function loadBoard(db: Db): Promise<Board> {
     const { item_id, ...rest } = p;
     (byItem[item_id] ||= []).push({ ...rest, working: working[p.id] ?? [], works: worksBy[p.id] ?? [], shipped: Math.round((shipped[p.id] ?? 0) * 1000) / 1000, ships: shipsBy[p.id] ?? [] });
   });
-  const list = (items.results as unknown as Omit<BoardItem, "procs">[]).map((it) => ({ ...it, procs: sortProcs(byItem[it.id] ?? []) }));
+  const list = (items.results as unknown as Omit<BoardItem, "procs" | "memos" | "dnote">[]).map((it) => ({
+    ...it,
+    procs: sortProcs(byItem[it.id] ?? []),
+    memos: memosBy[it.id] ?? [],
+    dnote: (it.drawing_no.trim() && dnoteBy[it.drawing_no.trim()]) || null,
+  }));
   const last = (imp.results as { at: string; file: string }[])[0] ?? null;
   return { ver: (ver.results as { value: string }[])[0]?.value ?? "1", lists, lastImport: last, items: list };
 }

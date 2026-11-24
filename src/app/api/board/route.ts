@@ -18,5 +18,5 @@ export async function GET(req: Request) {
     if (row?.value === known) return Response.json({ same: true, ver: known });
   }
   const board = await loadBoard(db);
-  return Response.json({ ...board, me: { name: user.name, named: user.named, admin: isAdmin(user) } });
+  return Response.json({ ...board, me: { name: user.name, named: user.named, admin: isAdmin(user), email: user.email } });
 }
