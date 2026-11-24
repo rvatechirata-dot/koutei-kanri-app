@@ -1,6 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
-import Link from "next/link";
+import Nav from "@/components/Nav";
 import { getCurrentUser, isAdmin } from "@/lib/auth";
 import DevUserSwitcher from "@/components/DevUserSwitcher";
 import PwaRegister from "@/components/PwaRegister";
@@ -52,29 +52,8 @@ export default async function RootLayout({
         <link rel="manifest" href="/manifest.webmanifest" crossOrigin="use-credentials" />
       </head>
       <body className="min-h-full">
-        <header className="border-b border-line bg-white">
-          <div className="mx-auto flex max-w-[96rem] flex-wrap items-center gap-x-8 gap-y-2 px-4 py-2">
-            <Link href="/board" className="border-l-4 border-accent pl-2 text-xl font-bold whitespace-nowrap">
-              工程管理
-            </Link>
-            <nav className="flex flex-wrap items-center gap-4 text-base">
-              <Link href="/board" className="flex min-h-11 items-center text-accent underline-offset-4 hover:underline">工程一覧</Link>
-              <Link href="/orders" className="flex min-h-11 items-center text-accent underline-offset-4 hover:underline">受注一覧</Link>
-              <Link href="/lanes"className="flex min-h-11 items-center text-accent underline-offset-4 hover:underline">ボード</Link>
-              <Link href="/ship"className="flex min-h-11 items-center text-accent underline-offset-4 hover:underline">出荷</Link>
-              <Link href="/stock" className="flex min-h-11 items-center text-accent underline-offset-4 hover:underline">在庫</Link>
-              <Link href="/gantt" className="flex min-h-11 items-center text-accent underline-offset-4 hover:underline">ガント</Link>
-              <Link href="/summary"className="flex min-h-11 items-center text-accent underline-offset-4 hover:underline">集計</Link>
-              {isAdmin(user) && <Link href="/import" className="flex min-h-11 items-center text-accent underline-offset-4 hover:underline">CSV取り込み</Link>}
-              {isAdmin(user) && <Link href="/cases" className="flex min-h-11 items-center text-accent underline-offset-4 hover:underline">案件</Link>}
-              {isAdmin(user) && <Link href="/master"className="flex min-h-11 items-center text-accent underline-offset-4 hover:underline">基本の一覧</Link>}
-              {isAdmin(user) && <Link href="/logs" className="flex min-h-11 items-center text-accent underline-offset-4 hover:underline">操作ログ</Link>}
-            </nav>
-            <div className="ml-auto text-sm text-ink-sub">
-              {user.name}{isAdmin(user) ? "（管理者）" : ""}
-            </div>
-          </div>
-        </header>
+        {/* 上のメニュー：今開いている画面のタブを明るく太字にする（出来高アプリと同じ形・2026-11-24） */}
+        <Nav admin={isAdmin(user)} userLabel={`${user.name}${isAdmin(user) ? "（管理者）" : ""}`} />
         {isDev && <DevUserSwitcher current={user.email} />}
         <main className="mx-auto max-w-[96rem] px-4 py-4 lg:px-8">{children}</main>
         {/* 版番号（GitHub のコミット番号と見比べる用・2026-09-25） */}
