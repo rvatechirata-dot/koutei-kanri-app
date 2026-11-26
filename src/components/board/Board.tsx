@@ -673,11 +673,6 @@ function ItemRowView({
           <span className="text-sm text-ink-sub">
             {it.customer}
             {it.qty ? `・${it.qty}個` : ""}
-            {it.final_due && (
-              <>
-                ・納期 <span className={late ? "font-bold text-danger" : ""}>{dateOnly(it.final_due)}{late ? "（遅れ）" : ""}</span>
-              </>
-            )}
           </span>
         </button>
         </div>
@@ -722,6 +717,7 @@ function ItemRowView({
             );
           })}
         </div>
+        <BandSide it={it} cur={cur} shipId={shipId} late={late} />
       </div>
       {panelPid && (() => {
         const p = it.procs.find((x) => x.id === panelPid);
@@ -737,6 +733,69 @@ function ItemRowView({
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+/** 'YYYY/MM/DD…' → 'YY/MM/DD(曜)'（エムネットの一覧と同じ短い形＋曜日） */
+function shortDate(s: string): string {
+  const m = /^(\d{4})\/(\d{2})\/(\d{2})/.exec(s);
+  if (!m) return s;
+  const w = "日月火水木金土"[new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).getDay()];
+  return `${m[1].slice(2)}/${m[2]}/${m[3]}(${w})`;
+}
+
+/**
+ * 帯の右端（2026-11-27 川﨑部長「出荷日を分かりやすく・備考を右端に」エムネットの一覧と同じ並び）。
+ * 左＝日付：最終納期（大きく・遅れは赤＋「遅れ」）・今の工程の納期・出荷（出荷した日、まだなら出荷の工程の納期）。
+ * 右＝ノウハウ欄（エムネットでオーダー番号・出荷日などを書いている所）と備考を全文。「出荷日」を含む行は太字。
+ */
+function BandSide({ it, cur, shipId, late }: { it: BoardItem; cur: BoardProc | null; shipId: string; late: boolean }) {
+  const ship = it.procs.find((p) => p.id === shipId);
+  const shipped = ship && ship.ships.length ? ship.ships[ship.ships.length - 1].ship_date : "";
+  const curDue = cur && cur.id !== shipId && cur.due ? cur.due : "";
+  const shipDue = ship?.due || "";
+  const lines = [it.knowhow, it.note && `備考：${it.note}`].filter(Boolean).join("\n").split(/\r?\n/);
+  const text = lines.some((l) => l.trim());
+  return (
+    <div className="flex gap-2 border-t border-line pt-2 lg:w-[26rem] lg:shrink-0 lg:border-l lg:border-t-0 lg:pl-2 lg:pt-0">
+      <dl className="w-36 shrink-0 text-sm leading-tight">
+        <dt className="text-ink-sub">最終納期</dt>
+        <dd className={`text-lg font-bold ${late ? "text-danger" : ""}`}>
+          {it.final_due ? shortDate(it.final_due) : "－"}
+          {late && <span className="ml-1 rounded bg-danger px-1 text-sm text-white">遅れ</span>}
+        </dd>
+        {curDue && (
+          <>
+            <dt className="mt-1 text-ink-sub">今の工程の納期</dt>
+            <dd className="text-base font-bold">{shortDate(curDue)}</dd>
+          </>
+        )}
+        {shipped ? (
+          <>
+            <dt className="mt-1 text-ink-sub">出荷した日</dt>
+            <dd className="text-base font-bold">済 {shortDate(shipped)}</dd>
+          </>
+        ) : (
+          shipDue && (
+            <>
+              <dt className="mt-1 text-ink-sub">出荷の予定</dt>
+              <dd className="text-base font-bold">{shortDate(shipDue)}</dd>
+            </>
+          )
+        )}
+      </dl>
+      <div className="min-w-0 flex-1 break-words text-base leading-snug" title="ノウハウ欄・備考（エムネットのCSV取り込みで入れ替わります）">
+        {text ? (
+          lines.map((l, k) => (
+            <div key={k} className={l.includes("出荷日") ? "font-bold" : ""}>
+              {l || "\u00a0"}
+            </div>
+          ))
+        ) : (
+          <span className="text-ink-sub">ノウハウ・備考なし</span>
+        )}
+      </div>
     </div>
   );
 }
