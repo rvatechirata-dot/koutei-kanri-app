@@ -52,27 +52,108 @@ function loadFilters() {
     return {};
   }
 }
+type Due = "" | "today" | "week" | "nextweek" | "month" | "range";
 interface Filters {
   q: string;
   cur: string;
   status: Status;
   hidden: boolean;
   late: boolean;
+  /** 客先（顧客名と同じもの） */
+  cust: string;
+  /** 納期で絞る（今週・来週などは開いた日から数える＝URLを後で開いてもその日の「今週」） */
+  due: Due;
+  from: string;
+  to: string;
+  /** 機械（まだ終わっていない工程にこの機械があるもの） */
+  mc: string;
 }
-const EMPTY: Filters = { q: "", cur: "", status: "open", hidden: false, late: false };
+const EMPTY: Filters = { q: "", cur: "", status: "open", hidden: false, late: false, cust: "", due: "", from: "", to: "", mc: "" };
+
+/**
+ * 絞り方をURLに入れる（2026-11-27 川﨑部長・案A）。
+ * そのURLをブックマーク・LINE WORKS で送れば、開いた人も同じ絞り方で見られる。決まった値（EMPTY）と同じものは入れない。
+ *   q=言葉（スペースで区切ると全部を含むもの）・cur=今の工程・st=open/done/all・late=1・hidden=1
+ *   cust=客先・due=today/week/nextweek/month/range（range のときだけ from・to＝YYYY-MM-DD）・mc=機械
+ */
+const DUES: Due[] = ["", "today", "week", "nextweek", "month", "range"];
+function filtersToQuery(f: Filters): string {
+  const p = new URLSearchParams();
+  if (f.q.trim()) p.set("q", f.q.trim());
+  if (f.cur) p.set("cur", f.cur);
+  if (f.status !== "open") p.set("st", f.status);
+  if (f.late) p.set("late", "1");
+  if (f.hidden) p.set("hidden", "1");
+  if (f.cust) p.set("cust", f.cust);
+  if (f.due) p.set("due", f.due);
+  if (f.due === "range" && f.from) p.set("from", f.from);
+  if (f.due === "range" && f.to) p.set("to", f.to);
+  if (f.mc) p.set("mc", f.mc);
+  const s = p.toString();
+  return s ? `?${s}` : "";
+}
+/** URLに絞り方が入っていれば読む（無ければ null）。受注一覧から ?q=管理番号 だけで来たときは「すべて」から探す（前と同じ） */
+function filtersFromQuery(search: string): Filters | null {
+  const p = new URLSearchParams(search);
+  const keys = ["q", "cur", "st", "late", "hidden", "cust", "due", "from", "to", "mc"];
+  if (!keys.some((k) => p.has(k))) return null;
+  const st = p.get("st");
+  const due = (p.get("due") || "") as Due;
+  return {
+    q: p.get("q") || "",
+    cur: p.get("cur") || "",
+    status: st === "open" || st === "done" || st === "all" ? st : p.has("q") ? "all" : "open",
+    late: p.get("late") === "1",
+    hidden: p.get("hidden") === "1",
+    cust: p.get("cust") || "",
+    due: DUES.includes(due) ? due : "",
+    from: p.get("from") || "",
+    to: p.get("to") || "",
+    mc: p.get("mc") || "",
+  };
+}
+
+/** 'YYYY/MM/DD' に日数を足す */
+function addDays(d: string, n: number): string {
+  const [y, m, dd] = d.split("/").map(Number);
+  return new Date(Date.UTC(y, m - 1, dd + n)).toISOString().slice(0, 10).replace(/-/g, "/");
+}
+/** 納期の絞りの範囲 [から, まで]（'YYYY/MM/DD'・空＝決めない）。週は月曜はじまり */
+function dueRange(f: Filters, today: string): [string, string] | null {
+  if (!f.due) return null;
+  const [y, m, d] = today.split("/").map(Number);
+  const wd = (new Date(Date.UTC(y, m - 1, d)).getUTCDay() + 6) % 7; // 月=0 … 日=6
+  const mon = addDays(today, -wd);
+  if (f.due === "today") return ["", today];
+  if (f.due === "week") return [mon, addDays(mon, 6)];
+  if (f.due === "nextweek") return [addDays(mon, 7), addDays(mon, 13)];
+  if (f.due === "month") {
+    const next = m === 12 ? `${y + 1}/01/01` : `${y}/${String(m + 1).padStart(2, "0")}/01`;
+    return [`${today.slice(0, 8)}01`, addDays(next, -1)];
+  }
+  return [f.from.replace(/-/g, "/"), f.to.replace(/-/g, "/")];
+}
 
 export default function BoardView() {
   const [board, setBoard] = useState<BoardRes | null>(null);
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
   // 絞り込みは端末ごとに覚える。データが届くまで画面には出ないので、最初から覚えた値で始める
-  // ?q=管理番号 で開いたとき（受注一覧から）は、その管理番号で「すべて」から探す
+  // URLに絞り方が入っていればそれを使う（ブックマーク・送られたURL・受注一覧の ?q=管理番号）。無ければ端末が覚えた絞り方
   const [f, setFilters] = useState<Filters>(() => {
     if (typeof window === "undefined") return EMPTY;
-    const q = new URLSearchParams(window.location.search).get("q");
-    return q ? { ...EMPTY, q, status: "all" } : { ...EMPTY, ...loadFilters() };
+    return filtersFromQuery(window.location.search) ?? { ...EMPTY, ...loadFilters() };
   });
   const [limit, setLimit] = useState(PAGE);
+  // 今の絞り方をいつもURLに映す（画面を読み直さずに書き換える）
+  useEffect(() => {
+    try {
+      const url = window.location.pathname + filtersToQuery(f) + window.location.hash;
+      if (url !== window.location.pathname + window.location.search + window.location.hash) window.history.replaceState(window.history.state, "", url);
+    } catch {
+      // 書き換えられなくても絞り込みは動く
+    }
+  }, [f]);
   const setF = (nf: Filters) => {
     setFilters(nf);
     setLimit(PAGE);
@@ -142,19 +223,51 @@ export default function BoardView() {
   const today = todayJst();
   const base = useMemo(() => {
     if (!board) return [];
-    const q = f.q.trim().toLowerCase();
+    // 言葉はスペース（全角も）で区切ると、全部を含むものだけ
+    const words = f.q.trim().toLowerCase().split(/[\s　]+/).filter(Boolean);
+    const dr = dueRange(f, today);
     return board.items.filter((it) => {
       if (!f.hidden && (it.hidden === "1" || it.case_hidden === "1")) return false;
       if (f.status === "open" && isDone(it)) return false;
       if (f.status === "done" && !isDone(it)) return false;
       if (f.late && !(it.final_due && dateOnly(it.final_due) < today && !isDone(it))) return false;
-      if (q) {
+      if (f.cust && it.customer !== f.cust) return false;
+      if (f.mc && !it.procs.some((p) => !p.done_at && p.machine === f.mc)) return false;
+      if (dr) {
+        const d = it.final_due ? dateOnly(it.final_due) : "";
+        if (!d) return false;
+        if (dr[0] && d < dr[0]) return false;
+        if (dr[1] && d > dr[1]) return false;
+      }
+      if (words.length) {
         const hay = [it.mgmt_no, it.drawing_no, it.name, it.customer, it.barcode, it.customer_po].join(" ").toLowerCase();
-        if (!hay.includes(q)) return false;
+        if (!words.every((w) => hay.includes(w))) return false;
       }
       return true;
     });
-  }, [board, f.q, f.status, f.hidden, f.late, today]);
+  }, [board, f, today]);
+
+  // 客先・機械の選ぶ欄の中身（今のデータにあるもの）
+  const choices = useMemo(() => {
+    const cs = new Set<string>();
+    const ms = new Set<string>();
+    board?.items.forEach((it) => {
+      if (it.customer) cs.add(it.customer);
+      it.procs.forEach((p) => p.machine && p.machine !== "-" && ms.add(p.machine));
+    });
+    const sort = (s: Set<string>) => [...s].sort((a, b) => a.localeCompare(b, "ja"));
+    return { cust: sort(cs), mc: sort(ms) };
+  }, [board]);
+
+  const copyUrl = async () => {
+    const url = window.location.origin + window.location.pathname + filtersToQuery(f);
+    try {
+      await navigator.clipboard.writeText(url);
+      setToast({ text: "この絞り方のURLをコピーしました。\nブックマークや LINE WORKS に貼ると、開いたときにこの絞り方で出ます。" });
+    } catch {
+      window.prompt("このURLをコピーしてください（ブックマークや LINE WORKS に貼れます）", url);
+    }
+  };
 
   // 今の工程ごとの数（絞り込みの「今の工程」をのぞいた数）
   const curCounts = useMemo(() => {
@@ -324,13 +437,56 @@ export default function BoardView() {
       {/* 絞り込み */}
       <div className="mt-4 flex flex-wrap items-end gap-4 rounded-lg bg-card p-4">
         <label className="flex flex-col gap-2 text-sm">
-          さがす（管理番号・図面番号・品名・顧客・バーコード）
+          さがす（管理番号・図面番号・品名・顧客・バーコード。スペースで区切ると全部を含むもの）
           <input
             value={f.q}
             onChange={(e) => setF({ ...f, q: e.target.value })}
             className="min-h-11 w-72 max-w-full rounded border border-ink-sub bg-white px-2 text-base"
-            placeholder="例：1334 / ABC-123"
+            placeholder="例：島津 ハウジング"
           />
+        </label>
+        <label className="flex flex-col gap-2 text-sm">
+          客先
+          <select value={f.cust} onChange={(e) => setF({ ...f, cust: e.target.value })} className="min-h-11 max-w-64 rounded border border-ink-sub bg-white px-2 text-base">
+            <option value="">すべて</option>
+            {f.cust && !choices.cust.includes(f.cust) && <option value={f.cust}>{f.cust}</option>}
+            {choices.cust.map((c) => (
+              <option key={c}>{c}</option>
+            ))}
+          </select>
+        </label>
+        <label className="flex flex-col gap-2 text-sm">
+          納期（品目の最終納期）
+          <select value={f.due} onChange={(e) => setF({ ...f, due: e.target.value as Due })} className="min-h-11 rounded border border-ink-sub bg-white px-2 text-base">
+            <option value="">すべて</option>
+            <option value="today">今日まで（遅れも入る）</option>
+            <option value="week">今週（月〜日）</option>
+            <option value="nextweek">来週（月〜日）</option>
+            <option value="month">今月</option>
+            <option value="range">日付で決める</option>
+          </select>
+        </label>
+        {f.due === "range" && (
+          <span className="flex flex-wrap items-end gap-2">
+            <label className="flex flex-col gap-2 text-sm">
+              から
+              <input type="date" value={f.from} onChange={(e) => setF({ ...f, from: e.target.value })} className="min-h-11 rounded border border-ink-sub bg-white px-2 text-base" />
+            </label>
+            <label className="flex flex-col gap-2 text-sm">
+              まで
+              <input type="date" value={f.to} onChange={(e) => setF({ ...f, to: e.target.value })} className="min-h-11 rounded border border-ink-sub bg-white px-2 text-base" />
+            </label>
+          </span>
+        )}
+        <label className="flex flex-col gap-2 text-sm">
+          機械（まだの工程にあるもの）
+          <select value={f.mc} onChange={(e) => setF({ ...f, mc: e.target.value })} className="min-h-11 rounded border border-ink-sub bg-white px-2 text-base">
+            <option value="">すべて</option>
+            {f.mc && !choices.mc.includes(f.mc) && <option value={f.mc}>{f.mc}</option>}
+            {choices.mc.map((m) => (
+              <option key={m}>{m}</option>
+            ))}
+          </select>
         </label>
         <label className="flex flex-col gap-2 text-sm">
           状態
@@ -351,7 +507,13 @@ export default function BoardView() {
         <button type="button" onClick={() => setF(EMPTY)} className="min-h-11 rounded-lg border border-accent bg-white px-4 text-base font-bold text-accent">
           条件を消す
         </button>
+        <button type="button" onClick={copyUrl} className="min-h-11 rounded-lg bg-accent px-4 text-base font-bold text-white" title="ブックマークや LINE WORKS に貼ると、この絞り方ですぐ開けます">
+          🔗 この絞り方のURLをコピー
+        </button>
       </div>
+      <p className="mt-2 text-sm text-ink-sub">
+        絞り方は画面の上のURLにも入っています。よく使う絞り方は、このままブックマークすると次から1回で開けます（「今週」などは開いた日から数えます）。
+      </p>
 
       {/* 今の工程ごとの数 */}
       <section className="mt-4">
@@ -478,8 +640,16 @@ function ItemRowView({
   // 出荷の工程（名前に「出荷」が無いときは最後の工程＝「目視、梱包」など。在庫の計算と同じ決め方）
   const shipId = stockRole(it.kubun, it.procs)?.ship ?? "";
   return (
-    <div className={`rounded-lg border bg-white ${late ? "border-l-8 border-l-danger border-line" : "border-line"}`}>
-      <div className="flex flex-col gap-2 p-2 lg:flex-row">
+    // 開いている案件は、青い太枠で囲み、見出しの帯を薄い青にする（どこからどこまでが1つの案件かを分かりやすく・2026-11-27）
+    <div className={`rounded-lg bg-white ${open ? "my-2 border-4 border-accent shadow-md" : "border border-line"} ${late ? "border-l-8 border-l-danger" : ""}`}>
+      {/* 帯のどこを押しても開く・閉じる（工程の札・チェック・ボタンは、それぞれの働きのまま） */}
+      <div
+        className={`flex cursor-pointer flex-col gap-2 p-2 lg:flex-row ${open ? "rounded-t bg-[#EAF1FB]" : "hover:bg-card"}`}
+        onClick={(e) => {
+          if ((e.target as HTMLElement).closest("button,a,input,label,select,textarea")) return;
+          onToggle();
+        }}
+      >
         <div className="flex min-w-0 gap-2 lg:w-80 lg:shrink-0">
         {cur ? (
           <label className="flex min-h-11 min-w-11 shrink-0 items-start justify-center pt-1" title="今の工程をまとめて完了するときに選ぶ">
@@ -490,7 +660,9 @@ function ItemRowView({
         )}
         <button type="button" onClick={onToggle} className="flex min-w-0 flex-col items-start gap-1 text-left" aria-expanded={open}>
           <span className="flex flex-wrap items-center gap-2">
+            <span className="text-base text-accent" aria-hidden>{open ? "▼" : "▶"}</span>
             <span className="text-base font-bold">{it.mgmt_no || "（管理番号なし）"}</span>
+            {open && <span className="rounded bg-accent px-2 text-sm font-bold text-white">開いています</span>}
             {it.kubun && <span className="rounded border border-line px-1 text-sm">{it.kubun}</span>}
             {(it.hidden === "1" || it.case_hidden === "1") && <span className="rounded border border-line px-1 text-sm">隠す</span>}
             <MemoMarks it={it} />
@@ -555,7 +727,16 @@ function ItemRowView({
         const p = it.procs.find((x) => x.id === panelPid);
         return p ? panel(p) : null;
       })()}
-      {open && <ItemDetail it={it} admin={admin} cur={cur} shipId={shipId} onOpen={onChip} onQuick={onQuick} memo={memo} />}
+      {open && (
+        <>
+          <ItemDetail it={it} admin={admin} cur={cur} shipId={shipId} onOpen={onChip} onQuick={onQuick} memo={memo} />
+          <div className="flex justify-center border-t border-line bg-[#EAF1FB] p-2">
+            <button type="button" onClick={onToggle} className="min-h-11 rounded-lg border border-accent bg-white px-8 text-base font-bold text-accent">
+              ▲ {it.mgmt_no} を閉じる
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }
