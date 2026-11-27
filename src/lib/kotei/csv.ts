@@ -7,6 +7,7 @@
  * - 0〜10＝案件、11〜23＝品目、24〜63＝納品情報（5件×8列）、64〜＝工程（42列で1組＝社内17列＋外注25列）。
  * - バーコード番号が空の行・同じバーコードの2回目は飛ばす。数字だけでないバーコードは知らせるだけ（エクセルで壊れた疑い）。
  * ※ エムネットの列の並びが変わると読めなくなる（見出しの名前では見ていない）。
+ * ※ 2026-11-25 から増えた「色」の列は、読む前に dropColorCols で取り除く（新旧どちらの形も読める）。
  */
 import type { CsvRec, ProcFields } from "./types";
 
@@ -192,6 +193,22 @@ export function recOf(r: string[], line: number): CsvRec {
   return { a, i, p, line };
 }
 
+/**
+ * 2026-11-25 のエムネットのアップデートで、ガントチャート契約者の書き出しに「色」の列が増えた
+ * （品目の「備考」と「非表示」の間に1列、社内工程は「機械名」の後ろ・外注工程は「備考」の後ろに1列ずつ。904列→945列）。
+ * 2行目の見出しが「色」の列を全部の行から取り除き、前の形（904列）にそろえてから読む。前の形のCSVはそのまま。
+ */
+export function dropColorCols(rows: string[][]): string[][] {
+  const head = rows[1];
+  if (!head) return rows;
+  const drop = new Set<number>();
+  head.forEach((h, j) => {
+    if (h.trim() === "色") drop.add(j);
+  });
+  if (!drop.size) return rows;
+  return rows.map((r) => r.filter((_, j) => !drop.has(j)));
+}
+
 export interface CsvRead {
   fatal?: string;
   errs: string[];
@@ -200,7 +217,7 @@ export interface CsvRead {
 
 /** CSVの文字を読んで、取り込む行（バーコードで1行ずつ）にする */
 export function readMnetCsv(text: string): CsvRead {
-  const rows = parseCsv(text);
+  const rows = dropColorCols(parseCsv(text));
   const errs: string[] = [];
   if (rows.length < 2 || rows[1][0] !== "社内管理番号" || rows[1][11] !== "バーコード番号" || rows[1].length < 64)
     return {
