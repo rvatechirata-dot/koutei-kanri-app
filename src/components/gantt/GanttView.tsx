@@ -211,6 +211,13 @@ export default function GanttView() {
   const dragged = useRef(false);
   /** 引っぱりの最新の様子（マウスの動きをすぐ追うため、画面の状態とは別に持つ） */
   const dragRef = useRef<Drag | null>(null);
+  /**
+   * ガントの枠（2026-11-28 川﨑部長「チルトで横、ホイールで縦に切り替えると1秒くらい止まる」）：
+   * 横は枠・縦はページ全体と、スクロールする所が2つに分かれていると、ブラウザが直前の所にしばらく吸い付いて空振りする。
+   * 縦も横もこの1つの枠で動かすようにし、枠の高さは画面の下の端までにする。日付の見出しと品目の欄は動かしても残す。
+   */
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  const [boxH, setBoxH] = useState(600);
 
   const load = useCallback(
     () =>
@@ -440,6 +447,21 @@ export default function GanttView() {
       .sort((a, b) => (a.final_due || "9999").localeCompare(b.final_due || "9999"));
   }, [board, q, noPlan, days, start]);
 
+  // 枠の高さ＝画面の高さ − 枠より上の分（ページのいちばん上にいるとき、枠がちょうど画面の下の端まで）。まとめて動かす帯が出ているときはその分あける
+  useEffect(() => {
+    const fit = () => {
+      const el = boxRef.current;
+      if (!el) return;
+      const top = el.getBoundingClientRect().top + window.scrollY;
+      // 枠より下にあるもの（版の表示・下のあきなど）の高さも引いて、ページ全体は縦に動かないようにする
+      const below = Math.max(0, document.documentElement.scrollHeight - (top + el.offsetHeight));
+      setBoxH(Math.max(320, window.innerHeight - top - below - (sel.size ? 200 : 0)));
+    };
+    fit();
+    window.addEventListener("resize", fit);
+    return () => window.removeEventListener("resize", fit);
+  }, [board, msg, selMode, undos.length, redos.length, sel.size]);
+
   if (!board) return <p className="py-8 text-base text-ink-sub">{msg?.text || "読み込み中…"}</p>;
   const admin = board.me.admin;
   const SUB = "min-h-11 rounded-lg border border-accent bg-white px-4 text-base font-bold text-accent";
@@ -569,11 +591,11 @@ export default function GanttView() {
         {rows.length}件
       </p>
 
-      <div className="mt-2 overflow-x-auto rounded border border-line">
+      <div ref={boxRef} className="mt-2 overflow-auto overscroll-contain rounded border border-line" style={{ height: boxH }}>
         <div style={{ width }}>
-          {/* 日付の見出し */}
-          <div className="sticky top-0 z-10 flex border-b border-line bg-white">
-            <div className="shrink-0 border-r border-line px-2 py-1 text-sm font-bold" style={{ width: LEFT_W }}>
+          {/* 日付の見出し（縦に動かしても上に残す） */}
+          <div className="sticky top-0 z-30 flex border-b border-line bg-white">
+            <div className="sticky left-0 z-10 shrink-0 border-r border-line bg-white px-2 py-1 text-sm font-bold" style={{ width: LEFT_W }}>
               品目
             </div>
             {days.map((d) => (
@@ -687,7 +709,8 @@ function GRow({
   const h = Math.max(1, ends.length) * 40 + 8;
   return (
     <div className="flex border-b border-line">
-      <div className="shrink-0 border-r border-line px-2 py-1" style={{ width: LEFT_W }}>
+      {/* 品目の欄（横に動かしても左に残す） */}
+      <div className="sticky left-0 z-20 shrink-0 border-r border-line bg-white px-2 py-1" style={{ width: LEFT_W }}>
         <p className="text-base font-bold">{it.mgmt_no}</p>
         <p className="text-sm text-ink-sub">
           {it.drawing_no} {it.name}
