@@ -883,8 +883,6 @@ function ItemDetail({ it, admin, cur, shipId, onOpen, onQuick, memo }: { it: Boa
           この案件を直す（品目・工程の並び）
         </Link>
       )}
-      {/* 案件メモ欄（品番の注意＋この案件のメモ・2026-11-24） */}
-      <div className="mb-4">{memo()}</div>
       <ProcCards it={it} cur={cur} shipId={shipId} onOpen={onOpen} onQuick={onQuick} />
       <dl className="mt-4 grid grid-cols-1 gap-x-8 gap-y-2 text-base sm:grid-cols-2 lg:grid-cols-3">
         <Info k="バーコード番号" v={it.barcode} />
@@ -940,6 +938,20 @@ function ItemDetail({ it, admin, cur, shipId, onOpen, onQuick, memo }: { it: Boa
           {it.note && <p className="whitespace-pre-wrap">備考：{it.note}</p>}
         </div>
       )}
+      {/* 案件メモ欄（品番の注意＋この案件のメモ・2026-11-24）。2026-11-28 下へ移し、ふだんは畳む（上下の案件を見やすく） */}
+      <details className="group mt-4 rounded-lg border border-line">
+        <summary className="flex min-h-11 cursor-pointer list-none flex-wrap items-center gap-2 px-3 text-base font-bold text-accent [&::-webkit-details-marker]:hidden">
+          <span aria-hidden className="inline-block text-sm transition-transform group-open:rotate-90">▶</span>
+          案件メモ（品番の注意・この案件のメモ）を開く
+          {it.dnote?.body ? (
+            <span className="rounded border border-[#B08A00] bg-warn-bg px-1 text-sm text-ink">⚠ 品番の注意あり</span>
+          ) : (
+            <span className="text-sm font-normal text-ink-sub">品番の注意なし</span>
+          )}
+          <span className="text-sm font-normal text-ink-sub">💬 メモ {it.memos.length}件</span>
+        </summary>
+        <div className="border-t border-line p-3">{memo()}</div>
+      </details>
     </div>
   );
 }
