@@ -1,8 +1,10 @@
 # このアプリの持ち主（平田）の git のメールアドレス。1行に1つ。
 # ここにある人だけが main / master に直接 push できる（scripts/check-push.cjs）。
 # デプロイ前の関所（scripts/check-clean.cjs）も、ここにない人の直接の変更に ⚠ を付ける。
-# 平田以外の人は、ここに自分を足さないこと。
+# 平田・川﨑部長以外の人は、ここに自分を足さないこと。
+# 2026-11-28〜 川﨑部長（kawasaki-yu@rvatec.com）も持ち主と同じ扱い（平田さん決定）。
 rivatec061n@rivatec.local
 hirata@rvatec.com
 rvatec.hirata@gmail.com
 shoichiro.h@gmail.com
+kawasaki-yu@rvatec.com
