@@ -164,6 +164,10 @@ export default function BoardView() {
   const [open, setOpen] = useState<string | null>(null);
   const [panel, setPanel] = useState<{ item: string; pid: string } | null>(null);
   const [sel, setSel] = useState<Set<string>>(new Set());
+  // 記入漏れをまとめて完了（2026-11-28 川﨑部長）：札を押して工程を選ぶモード・選んだ工程・完了日（管理者だけ指定できる）
+  const [pickMode, setPickMode] = useState(false);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [doneDate, setDoneDate] = useState(() => todayJst().replace(/\//g, "-"));
   const [toast, setToast] = useState<{ text: string; bad?: boolean } | null>(null);
   // 共有メールでログインしたときだけ、端末で作業者を選ぶ（端末ごとに覚える）
   const [pick, setPickState] = useState<string>(() => {
@@ -355,6 +359,46 @@ export default function BoardView() {
     if (await send(acts, `${targets.length}件を完了にしました`)) setSel(new Set());
   };
 
+  // 記入漏れのまとめて完了：まだの工程（出荷の工程はのぞく）を札で選ぶ。札を押すと、その品目の手前のまだの工程も一緒に選ぶ。
+  // 選んだ札をもう一度押すと、その工程から後ろを外す。
+  const pickable = (it: BoardItem, p: BoardProc) => !p.done_at && stockRole(it.kubun, it.procs)?.ship !== p.id;
+  const onPick = (it: BoardItem, pid: string) => {
+    const list = it.procs.filter((p) => pickable(it, p));
+    const k = list.findIndex((p) => p.id === pid);
+    if (k < 0) return;
+    const n = new Set(picked);
+    if (n.has(pid)) list.slice(k).forEach((p) => n.delete(p.id));
+    else list.slice(0, k + 1).forEach((p) => n.add(p.id));
+    setPicked(n);
+  };
+  const stopPick = () => {
+    setPickMode(false);
+    setPicked(new Set());
+  };
+  const pickDone = async () => {
+    const targets = board.items.flatMap((it) => it.procs.filter((p) => picked.has(p.id) && pickable(it, p)).map((p) => ({ it, p })));
+    if (!targets.length) return;
+    const day = doneDate.replace(/-/g, "/");
+    if (me.admin && (!/^\d{4}\/\d{2}\/\d{2}$/.test(day) || day > today)) {
+      setToast({ text: "完了日は今日か、それより前の日にしてください。", bad: true });
+      return;
+    }
+    const nItems = new Set(targets.map((x) => x.it.id)).size;
+    const lines = targets.slice(0, 20).map((x) => `・${x.it.mgmt_no} ${x.it.drawing_no}：${x.p.name}`);
+    const more = targets.length > 20 ? `\n…ほか${targets.length - 20}件` : "";
+    const when = me.admin ? `完了日 ${day}` : "完了日は今の時刻";
+    if (!confirm(`${nItems}案件・${targets.length}工程を完了にします（${when}・数は品目の数量）。\n${lines.join("\n")}${more}\nよろしいですか？`)) return;
+    const acts: Act[] = targets.map(({ it, p }) => ({
+      op: "done",
+      pid: p.id,
+      qty: p.done_qty || it.qty || "0",
+      ng: p.defect_qty,
+      why: p.defect_reason,
+      ...(me.admin ? { at: day } : {}),
+    }));
+    if (await send(acts, `${nItems}案件・${targets.length}工程を完了にしました（${when}）`)) stopPick();
+  };
+
   return (
     <div>
       <div className="flex flex-wrap items-end gap-4">
@@ -518,7 +562,26 @@ export default function BoardView() {
               </button>
             );
           })}
+          <button
+            type="button"
+            onClick={() => {
+              if (pickMode) stopPick();
+              else {
+                setPickMode(true);
+                setSel(new Set());
+              }
+            }}
+            aria-pressed={pickMode}
+            className={`min-h-11 rounded-lg border-2 border-accent px-4 text-base font-bold sm:ml-auto ${pickMode ? "bg-accent text-white" : "bg-white text-accent"}`}
+          >
+            {pickMode ? "選ぶのをやめる" : "✓ 記入漏れをまとめて完了"}
+          </button>
         </div>
+        {pickMode && (
+          <p className="mt-2 rounded border-2 border-accent bg-[#EAF1FB] p-2 text-base">
+            完了にしたい工程の札を押して選んでください。札を押すと、その手前のまだの工程も一緒に選ばれます（選んだ札をもう一度押すと、そこから後ろを外します）。いくつの案件からでも選べます。出荷の工程は選べません（今までどおり1件ずつ）。
+          </p>
+        )}
       </section>
 
       <Legend />
@@ -534,7 +597,10 @@ export default function BoardView() {
             open={open === it.id}
             onToggle={() => setOpen(open === it.id ? null : it.id)}
             panelPid={panel?.item === it.id ? panel.pid : null}
-            onChip={(pid) => setPanel(panel?.item === it.id && panel.pid === pid ? null : { item: it.id, pid })}
+            onChip={(pid) => (pickMode ? onPick(it, pid) : setPanel(panel?.item === it.id && panel.pid === pid ? null : { item: it.id, pid }))}
+            pickMode={pickMode}
+            picked={picked}
+            canPick={(p) => pickable(it, p)}
             checked={sel.has(it.id)}
             onCheck={(on) => {
               const n = new Set(sel);
@@ -573,6 +639,30 @@ export default function BoardView() {
           </button>
           <button type="button" onClick={() => setSel(new Set())} className="min-h-11 rounded-lg border border-accent bg-white px-4 text-base font-bold text-accent">
             選ぶのをやめる
+          </button>
+        </div>
+      )}
+      {pickMode && (
+        <div className="sticky bottom-0 mt-4 flex flex-wrap items-end gap-4 border-t-2 border-accent bg-white py-4">
+          <p className="text-base">
+            <span className="font-bold">{picked.size}工程</span>を選んでいます
+          </p>
+          {me.admin ? (
+            <label className="flex flex-col gap-1 text-sm">
+              完了日（実際に終わった日）
+              <input type="date" value={doneDate} max={today.replace(/\//g, "-")} onChange={(e) => setDoneDate(e.target.value)} className="min-h-11 rounded border border-ink-sub bg-white px-2 text-base" />
+            </label>
+          ) : (
+            <p className="text-sm text-ink-sub">完了日は今の時刻になります（日付を決められるのは管理者だけ）</p>
+          )}
+          <button type="button" onClick={pickDone} disabled={!picked.size} className="min-h-11 rounded-lg bg-accent px-8 text-base font-bold text-white disabled:opacity-50">
+            選んだ工程を完了にする
+          </button>
+          <button type="button" onClick={() => setPicked(new Set())} disabled={!picked.size} className="min-h-11 rounded-lg border border-accent bg-white px-4 text-base font-bold text-accent disabled:opacity-50">
+            選んだのを全部外す
+          </button>
+          <button type="button" onClick={stopPick} className="min-h-11 rounded-lg border border-accent bg-white px-4 text-base font-bold text-accent">
+            やめる
           </button>
         </div>
       )}
@@ -616,6 +706,9 @@ function ItemRowView({
   onQuick,
   memo,
   edit,
+  pickMode,
+  picked,
+  canPick,
 }: {
   it: BoardItem;
   today: string;
@@ -630,6 +723,9 @@ function ItemRowView({
   onQuick: (p: BoardProc) => void;
   memo: () => React.ReactNode;
   edit: (close: () => void) => React.ReactNode;
+  pickMode: boolean;
+  picked: Set<string>;
+  canPick: (p: BoardProc) => boolean;
 }) {
   const cur = curOf(it);
   const done = isDone(it);
@@ -648,7 +744,7 @@ function ItemRowView({
         }}
       >
         <div className="flex min-w-0 gap-2 lg:w-80 lg:shrink-0">
-        {cur ? (
+        {cur && !pickMode ? (
           <label className="flex min-h-11 min-w-11 shrink-0 items-start justify-center pt-1" title="今の工程をまとめて完了するときに選ぶ">
             <input type="checkbox" checked={checked} onChange={(e) => onCheck(e.target.checked)} className="h-5 w-5" aria-label={`${it.mgmt_no}を選ぶ`} />
           </label>
@@ -697,11 +793,16 @@ function ItemRowView({
                 <button
                   type="button"
                   onClick={() => onChip(p.id)}
-                  aria-expanded={panelPid === p.id}
-                  className={`${CHIP} ${CHIP_STYLE[st]} ${panelPid === p.id ? "outline-2 outline-offset-2 outline-accent" : ""}`}
+                  aria-expanded={pickMode ? undefined : panelPid === p.id}
+                  aria-pressed={pickMode && canPick(p) ? picked.has(p.id) : undefined}
+                  disabled={pickMode && !canPick(p)}
+                  className={`${CHIP} ${CHIP_STYLE[st]} ${!pickMode && panelPid === p.id ? "outline-2 outline-offset-2 outline-accent" : ""} ${
+                    pickMode && picked.has(p.id) ? "outline-4 outline-offset-1 outline-accent" : ""
+                  } ${pickMode && !canPick(p) ? "cursor-not-allowed opacity-60" : ""}`}
                   title={tip}
                 >
                   <span>
+                    {pickMode && picked.has(p.id) && <span className="mr-1 rounded bg-accent px-1 text-sm font-bold text-white">✓選択</span>}
                     {MARK[st] && <span className="mr-1">{MARK[st]}</span>}
                     {p.in_out === "外注" && <span className="mr-1 text-sm">外注</span>}
                     {p.name}

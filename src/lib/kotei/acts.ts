@@ -11,6 +11,7 @@
  *   - 押した時刻はサーバーの時計（端末の時計がずれていても同じ時刻になる）。送信待ちの列（離れたところで押しためる）は持たない
  *   - 作業者はログインした人（共有メールのときだけ、一覧から選んだ人）。他人の名前では押せない
  *   - 同じ操作が2回届いたときは、実績記録の「操作の札」で見分けて1回分にする
+ * 完了日の指定（at）：記入漏れをまとめて完了するとき、管理者だけ過去の日付で完了にできる（時刻は押した時刻の時:分）。開始より前の日・出荷の工程は断る。
  * 3段目：'ship'（分納＝工程は完了にせず出荷だけ記録。何回でも）・'unship'（出荷を取り消す。工程の完了はそのまま）。
  * エムネットの作業ログの取り込みは worklog.ts。
  */
@@ -46,6 +47,7 @@ export interface Act {
   e?: string; // 作業を直すときの終了日時
   base?: { s?: string; e?: string } | string; // 画面が見ていた開始・完了日時（工程）／作業の行の印（作業を直す）
   ship?: ShipInput; // 出荷の工程の完了のとき
+  at?: string; // 完了日を指定するとき（'YYYY/MM/DD'・管理者だけ・出荷の工程はだめ・今日より後はだめ）。記入漏れのまとめて完了で使う（2026-11-28）
 }
 
 export class ActError extends Error {}
@@ -298,11 +300,33 @@ export async function applyActs(db: Db, p: { acts: Act[]; worker: string; accoun
           continue;
         }
       }
+      // 完了日の指定（記入漏れのまとめて完了・管理者だけ）
+      let at = when;
+      if (a.at) {
+        const d = txt(a.at);
+        if (!admin) {
+          errs.push(`${name}：完了日を指定できるのは管理者だけです`);
+          continue;
+        }
+        if (isShip) {
+          errs.push(`${name}：出荷の工程は完了日を指定できません（1件ずつ出荷を記録してください）`);
+          continue;
+        }
+        if (!/^\d{4}\/\d{2}\/\d{2}$/.test(d) || d > now.slice(0, 10)) {
+          errs.push(`${name}：完了日の形がおかしいか、今日より後です（${d}）`);
+          continue;
+        }
+        at = d === now.slice(0, 10) ? when : `${d} ${now.slice(11, 16)}`;
+        if (s && s > at) {
+          errs.push(`${name}：開始（${s}）より前の日には完了できません`);
+          continue;
+        }
+      }
       if (!s) {
-        set.started_at = when;
+        set.started_at = at;
         set.started_by = worker;
       }
-      set.done_at = when;
+      set.done_at = at;
       set.done_by = worker;
       set.done_qty = isShip ? round(shippedOf(r.id) + Number(qty)) : qty;
       set.defect_qty = num(a.ng, "不良数", name);
@@ -461,7 +485,7 @@ export async function applyActs(db: Db, p: { acts: Act[]; worker: string; accoun
     }
     if (pl.op === "コメント") what = r.comment;
     if (pl.op === "完了")
-      what = [r.defect_qty ? "不良 " + r.defect_qty + (r.defect_reason ? `（${r.defect_reason}）` : "") : "", pl.set.comment || ""].filter(Boolean).join(" ");
+      what = [pl.set.done_at && pl.set.done_at !== when ? `完了日を指定（${pl.set.done_at}）` : "", r.defect_qty ? "不良 " + r.defect_qty + (r.defect_reason ? `（${r.defect_reason}）` : "") : "", pl.set.comment || ""].filter(Boolean).join(" ");
     if (role && pl.op === "完了" && role.prod === pid) {
       // 出荷の1つ手前が終わった：製品が増える（在庫から出した品目は増やさない）
       if (ships.some((x) => x.item_id === iid && x.from_stock === "1")) what = "在庫から出した品目なので、製品は増やさない";
