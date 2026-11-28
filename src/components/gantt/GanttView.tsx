@@ -664,14 +664,27 @@ function GRow({
 }) {
   const first = days[0];
   const last = days[days.length - 1];
-  // 見えている期間にかかる工程だけを、上から1段ずつ並べる
+  // 見えている期間にかかる工程だけを出す
   const procs = it.procs.filter((p) => {
     if (!p.plan_start && !p.due) return false;
     const s = (p.plan_start || p.due).slice(0, 10);
     const e = (p.due || p.plan_start).slice(0, 10);
     return e >= first && s <= last;
   });
-  const h = Math.max(1, procs.length) * 40 + 8;
+  // 段の割り当て（2026-11-28 川﨑部長「エムネットのように、時期が重ならない工程は同じ段に。重なったときだけ段を分ける」）：
+  // 始まりの早い順（同じ日なら工程の順）に、上の段から「前の棒の納期より後に始まる」段へ入れる。同じ日にかかるときは重なりとみなす。
+  const lane = new Map<string, number>();
+  const ends: string[] = []; // 段ごとの、最後に入れた棒の納期
+  procs
+    .map((p, i) => ({ p, i, s: (p.plan_start || p.due).slice(0, 10), e: (p.due || p.plan_start).slice(0, 10) }))
+    .sort((x, y) => x.s.localeCompare(y.s) || x.i - y.i)
+    .forEach(({ p, s, e }) => {
+      let k = ends.findIndex((end) => end < s);
+      if (k < 0) k = ends.length;
+      ends[k] = e < s ? s : e;
+      lane.set(p.id, k);
+    });
+  const h = Math.max(1, ends.length) * 40 + 8;
   return (
     <div className="flex border-b border-line">
       <div className="shrink-0 border-r border-line px-2 py-1" style={{ width: LEFT_W }}>
@@ -687,7 +700,8 @@ function GRow({
         )}
         {today >= first && today <= last && <div className="absolute top-0 bottom-0 w-0.5 bg-accent" style={{ left: diffDays(first, today) * DAY_W + DAY_W / 2 }} aria-hidden />}
         {procs.length === 0 && <p className="absolute top-2 left-2 text-sm text-ink-sub">予定なし</p>}
-        {procs.map((p, k) => {
+        {procs.map((p) => {
+          const k = lane.get(p.id) ?? 0;
           const s = (p.plan_start || p.due).slice(0, 10);
           const e = (p.due || p.plan_start).slice(0, 10);
           const a = Math.max(diffDays(first, s), -1);
