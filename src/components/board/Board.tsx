@@ -5,7 +5,7 @@
  * 1行＝品目1つ。右に工程を順番どおり全部「札」で並べ、どこまで進んだかを一目で見せる。
  *   完了＝緑地「済」／作業中＝黄地「中」／次（最初の未完了でまだ始まっていない）＝青い枠「次」／まだ＝灰
  *   色だけで伝えないよう、札の頭に「済・中・次」の字を付ける（WEBデザインルール）。外注・出荷も字で付ける。
- * 上の「今の工程ごとの数」を押すと、その工程にいる品目だけに絞る（受注がいまどこにいるかの全体像）。
+ * 上の3つのボタン（納品未だ・納品済み・全部）で切り替える。開いた直後は「納品未だ」を最終納期の近い順（2026-11-28 川﨑部長）。
  * 見方は川﨑部長の試作の工程一覧（index.html rowHtml）と同じ。
  * 2段目：札を押すと、工程の大きい画面（ProcPanel・画面に重ねる）が開き、開始・完了・作業を押せる。
  * 品目（管理番号）を押すと、工程カード（ProcCards・エムネットと同じ並び）が開く（2026-11-22）。
@@ -20,6 +20,7 @@ import { todayJst } from "@/lib/kotei/time";
 import ScrollWrap from "@/components/ScrollWrap";
 import ProcPanel, { type Send } from "./ProcPanel";
 import MemoBox, { MemoMarks } from "./MemoBox";
+import CaseQuickEdit from "./CaseQuickEdit";
 
 type Status = "open" | "done" | "all";
 type Me = { name: string; named: boolean; admin: boolean; email?: string };
@@ -55,7 +56,6 @@ function loadFilters() {
 type Due = "" | "today" | "week" | "nextweek" | "month" | "range";
 interface Filters {
   q: string;
-  cur: string;
   status: Status;
   hidden: boolean;
   late: boolean;
@@ -68,19 +68,18 @@ interface Filters {
   /** 機械（まだ終わっていない工程にこの機械があるもの） */
   mc: string;
 }
-const EMPTY: Filters = { q: "", cur: "", status: "open", hidden: false, late: false, cust: "", due: "", from: "", to: "", mc: "" };
+const EMPTY: Filters = { q: "", status: "open", hidden: false, late: false, cust: "", due: "", from: "", to: "", mc: "" };
 
 /**
  * 絞り方をURLに入れる（2026-11-27 川﨑部長・案A）。
  * そのURLをブックマーク・LINE WORKS で送れば、開いた人も同じ絞り方で見られる。決まった値（EMPTY）と同じものは入れない。
- *   q=言葉（スペースで区切ると全部を含むもの）・cur=今の工程・st=open/done/all・late=1・hidden=1
+ *   q=言葉（スペースで区切ると全部を含むもの）・st=open/done/all・late=1・hidden=1
  *   cust=客先・due=today/week/nextweek/month/range（range のときだけ from・to＝YYYY-MM-DD）・mc=機械
  */
 const DUES: Due[] = ["", "today", "week", "nextweek", "month", "range"];
 function filtersToQuery(f: Filters): string {
   const p = new URLSearchParams();
   if (f.q.trim()) p.set("q", f.q.trim());
-  if (f.cur) p.set("cur", f.cur);
   if (f.status !== "open") p.set("st", f.status);
   if (f.late) p.set("late", "1");
   if (f.hidden) p.set("hidden", "1");
@@ -95,13 +94,12 @@ function filtersToQuery(f: Filters): string {
 /** URLに絞り方が入っていれば読む（無ければ null）。受注一覧から ?q=管理番号 だけで来たときは「すべて」から探す（前と同じ） */
 function filtersFromQuery(search: string): Filters | null {
   const p = new URLSearchParams(search);
-  const keys = ["q", "cur", "st", "late", "hidden", "cust", "due", "from", "to", "mc"];
+  const keys = ["q", "st", "late", "hidden", "cust", "due", "from", "to", "mc"];
   if (!keys.some((k) => p.has(k))) return null;
   const st = p.get("st");
   const due = (p.get("due") || "") as Due;
   return {
     q: p.get("q") || "",
-    cur: p.get("cur") || "",
     status: st === "open" || st === "done" || st === "all" ? st : p.has("q") ? "all" : "open",
     late: p.get("late") === "1",
     hidden: p.get("hidden") === "1",
@@ -228,8 +226,6 @@ export default function BoardView() {
     const dr = dueRange(f, today);
     return board.items.filter((it) => {
       if (!f.hidden && (it.hidden === "1" || it.case_hidden === "1")) return false;
-      if (f.status === "open" && isDone(it)) return false;
-      if (f.status === "done" && !isDone(it)) return false;
       if (f.late && !(it.final_due && dateOnly(it.final_due) < today && !isDone(it))) return false;
       if (f.cust && it.customer !== f.cust) return false;
       if (f.mc && !it.procs.some((p) => !p.done_at && p.machine === f.mc)) return false;
@@ -269,31 +265,21 @@ export default function BoardView() {
     }
   };
 
-  // 今の工程ごとの数（絞り込みの「今の工程」をのぞいた数）
-  const curCounts = useMemo(() => {
-    const m = new Map<string, number>();
-    base.forEach((it) => {
-      const c = curOf(it);
-      const k = c ? c.name : isDone(it) ? "（全部終わった）" : "（工程なし）";
-      m.set(k, (m.get(k) ?? 0) + 1);
-    });
-    return [...m.entries()].sort((a, b) => b[1] - a[1]);
+  // 納品未だ・納品済み・全部の数（ほかの絞り方をかけた後の数）
+  const counts = useMemo(() => {
+    const done = base.filter((it) => isDone(it)).length;
+    return { open: base.length - done, done, all: base.length } as Record<Status, number>;
   }, [base]);
 
+  // 並び順：最終納期の近い順（納期なしは下）→ 同じ日は管理番号の順
   const rows = useMemo(() => {
-    const list = f.cur
-      ? base.filter((it) => {
-          const c = curOf(it);
-          const k = c ? c.name : isDone(it) ? "（全部終わった）" : "（工程なし）";
-          return k === f.cur;
-        })
-      : base;
+    const list = f.status === "all" ? base : base.filter((it) => (f.status === "done" ? isDone(it) : !isDone(it)));
     return list.slice().sort((a, b) => {
       const da = a.final_due || "9999";
       const dbb = b.final_due || "9999";
       return da < dbb ? -1 : da > dbb ? 1 : a.mgmt_no.localeCompare(b.mgmt_no, "ja");
     });
-  }, [base, f.cur]);
+  }, [base, f.status]);
 
   if (!board) {
     return <p className="py-8 text-base text-ink-sub">{err || "読み込み中…"}</p>;
@@ -421,7 +407,7 @@ export default function BoardView() {
                 key={w.id}
                 type="button"
                 onClick={() => {
-                  setF({ ...f, q: it.mgmt_no, cur: "", status: "all" });
+                  setF({ ...f, q: it.mgmt_no, status: "all" });
                   setPanel({ item: it.id, pid: p.id });
                 }}
                 className="min-h-11 rounded-lg border border-line bg-white px-4 text-left text-base"
@@ -488,14 +474,6 @@ export default function BoardView() {
             ))}
           </select>
         </label>
-        <label className="flex flex-col gap-2 text-sm">
-          状態
-          <select value={f.status} onChange={(e) => setF({ ...f, status: e.target.value as Status })} className="min-h-11 rounded border border-ink-sub bg-white px-2 text-base">
-            <option value="open">終わっていない</option>
-            <option value="done">全部終わった</option>
-            <option value="all">すべて</option>
-          </select>
-        </label>
         <label className="flex min-h-11 items-center gap-2 text-base">
           <input type="checkbox" checked={f.late} onChange={(e) => setF({ ...f, late: e.target.checked })} className="h-5 w-5" />
           納期遅れだけ
@@ -515,22 +493,28 @@ export default function BoardView() {
         絞り方は画面の上のURLにも入っています。よく使う絞り方は、このままブックマークすると次から1回で開けます（「今週」などは開いた日から数えます）。
       </p>
 
-      {/* 今の工程ごとの数 */}
+      {/* 納品未だ・納品済み・全部（2026-11-28 川﨑部長：工程ごとのボタンをやめて3つに整理） */}
       <section className="mt-4">
-        <h2 className="text-xl font-bold">いまどの工程にいるか（{base.length}件）</h2>
-        <p className="mt-2 text-sm text-ink-sub">押すと、その工程にいる品目だけに絞ります。もう一度押すと元に戻ります。</p>
-        <div className="mt-2 flex flex-wrap gap-2">
-          {curCounts.map(([name, n]) => {
-            const on = f.cur === name;
+        <h2 className="text-xl font-bold">案件の一覧（{rows.length}件）</h2>
+        <p className="mt-2 text-sm text-ink-sub">押すと切り替わります。並びは最終納期の近い順です。「納品済み」＝出荷の工程が済んだもの。</p>
+        <div className="mt-2 flex flex-wrap gap-2" role="group" aria-label="納品の状態で切り替える">
+          {(
+            [
+              ["open", "納品未だ"],
+              ["done", "納品済み"],
+              ["all", "全部"],
+            ] as [Status, string][]
+          ).map(([k, label]) => {
+            const on = f.status === k;
             return (
               <button
-                key={name}
+                key={k}
                 type="button"
-                onClick={() => setF({ ...f, cur: on ? "" : name })}
+                onClick={() => setF({ ...f, status: k })}
                 className={`min-h-11 rounded-lg border px-4 text-base ${on ? "border-accent bg-accent font-bold text-white" : "border-line bg-white"}`}
                 aria-pressed={on}
               >
-                {name} <span className="font-bold">{n}</span>
+                {label} <span className="font-bold">{counts[k]}</span>
               </button>
             );
           })}
@@ -560,6 +544,17 @@ export default function BoardView() {
             }}
             panel={(p) => <ProcPanel key={p.id} it={it} p={p} me={me} worker={worker} lists={board.lists} send={send} onClose={() => setPanel(null)} onMemoSaved={() => show(fetchBoard())} />}
             memo={() => <MemoBox it={it} me={me} worker={worker} onSaved={() => show(fetchBoard())} />}
+            edit={(close) => (
+              <CaseQuickEdit
+                it={it}
+                onClose={close}
+                onSaved={async (msg) => {
+                  close();
+                  setToast({ text: msg });
+                  await show(fetchBoard());
+                }}
+              />
+            )}
             admin={me.admin}
             onQuick={(p) => quick(it, p)}
           />
@@ -620,6 +615,7 @@ function ItemRowView({
   admin,
   onQuick,
   memo,
+  edit,
 }: {
   it: BoardItem;
   today: string;
@@ -633,6 +629,7 @@ function ItemRowView({
   admin: boolean;
   onQuick: (p: BoardProc) => void;
   memo: () => React.ReactNode;
+  edit: (close: () => void) => React.ReactNode;
 }) {
   const cur = curOf(it);
   const done = isDone(it);
@@ -725,7 +722,7 @@ function ItemRowView({
       })()}
       {open && (
         <>
-          <ItemDetail it={it} admin={admin} cur={cur} shipId={shipId} onOpen={onChip} onQuick={onQuick} memo={memo} />
+          <ItemDetail it={it} admin={admin} cur={cur} shipId={shipId} onOpen={onChip} onQuick={onQuick} memo={memo} edit={edit} />
           <div className="flex justify-center border-t border-line bg-[#EAF1FB] p-2">
             <button type="button" onClick={onToggle} className="min-h-11 rounded-lg border border-accent bg-white px-8 text-base font-bold text-accent">
               ▲ {it.mgmt_no} を閉じる
@@ -875,14 +872,28 @@ function ProcCards({ it, cur, shipId, onOpen, onQuick }: { it: BoardItem; cur: B
   );
 }
 
-function ItemDetail({ it, admin, cur, shipId, onOpen, onQuick, memo }: { it: BoardItem; admin: boolean; cur: BoardProc | null; shipId: string; onOpen: (pid: string) => void; onQuick: (p: BoardProc) => void; memo: () => React.ReactNode }) {
+function ItemDetail({ it, admin, cur, shipId, onOpen, onQuick, memo, edit }: { it: BoardItem; admin: boolean; cur: BoardProc | null; shipId: string; onOpen: (pid: string) => void; onQuick: (p: BoardProc) => void; memo: () => React.ReactNode; edit: (close: () => void) => React.ReactNode }) {
+  // 「この案件を直す」は2通り：ここで（帯の項目だけ・この画面のまま）／別画面で（品目・工程の並びも）（2026-11-28 川﨑部長）
+  const [editing, setEditing] = useState(false);
   return (
     <div className="border-t border-line p-4">
       {admin && (
-        <Link href={`/cases?id=${encodeURIComponent(it.case_id)}`} className="mb-4 inline-flex min-h-11 items-center rounded-lg border border-accent px-4 text-base font-bold text-accent">
-          この案件を直す（品目・工程の並び）
-        </Link>
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <span className="text-base font-bold">この案件を直す：</span>
+          <button
+            type="button"
+            onClick={() => setEditing(!editing)}
+            aria-expanded={editing}
+            className={`min-h-11 rounded-lg border border-accent px-4 text-base font-bold ${editing ? "bg-accent text-white" : "bg-white text-accent"}`}
+          >
+            ここで（帯の項目）
+          </button>
+          <Link href={`/cases?id=${encodeURIComponent(it.case_id)}`} className="inline-flex min-h-11 items-center rounded-lg border border-accent bg-white px-4 text-base font-bold text-accent">
+            別画面で（品目・工程の並びも）
+          </Link>
+        </div>
       )}
+      {admin && editing && edit(() => setEditing(false))}
       <ProcCards it={it} cur={cur} shipId={shipId} onOpen={onOpen} onQuick={onQuick} />
       <dl className="mt-4 grid grid-cols-1 gap-x-8 gap-y-2 text-base sm:grid-cols-2 lg:grid-cols-3">
         <Info k="バーコード番号" v={it.barcode} />
